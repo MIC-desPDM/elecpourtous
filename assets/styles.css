@@ -746,7 +746,7 @@ dialog h2 {
 .sch-sep { width: 1px; align-self: stretch; min-height: 22px; background: var(--divider); margin: 0 4px; }
 .sch-snap { display: inline-flex; gap: 6px; align-items: center; font-size: 0.8125rem; color: var(--text-muted); cursor: pointer; }
 
-.sch-layout { display: grid; grid-template-columns: 270px 1fr; gap: 12px; height: calc(100dvh - 340px); min-height: 460px; }
+.sch-layout { display: grid; grid-template-columns: 270px 1fr; gap: 12px; height: calc(100dvh - 390px); min-height: 460px; }
 .sch-palette {
   overflow: auto;
   border: 1px solid var(--border);
@@ -780,3 +780,7 @@ dialog h2 {
   .sch-canvas-wrap { height: 58dvh; order: -1; }
   .sch-palette { max-height: 230px; }
 }
+
+.sch-bgbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.sch-bglabel { font-size: 0.8125rem; font-weight: 600; color: var(--text-muted); margin-right: 4px; }
+.sch-bgbar input[type='range'] { width: 110px; vertical-align: middle; }

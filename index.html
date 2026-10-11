@@ -569,6 +569,16 @@ M834 80h400000v40h-400000z"></path></svg></span></span></span><span class="vlist
       <button type="button" class="btn btn-danger btn-sm" id="sch-delete" title="Supprimer (Suppr)">Supprimer</button>
     </div>
 
+    <div class="sch-bgbar" id="sch-bgbar" role="toolbar" aria-label="Fond de plan">
+      <span class="sch-bglabel">Fond de plan</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-bg-import" title="Importer une image (JPG, PNG, WebP) comme fond de plan">Importer une image</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="bg" id="sch-bg-tool" aria-pressed="false" title="Déplacer et redimensionner le fond">Placer / redimensionner</button>
+      <label class="sch-snap">Opacité <input type="range" id="sch-bg-op" min="10" max="100" step="5" value="50"></label>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-bg-toggle">Masquer</button>
+      <button type="button" class="btn btn-danger btn-sm" id="sch-bg-remove">Retirer</button>
+      <input type="file" id="sch-bg-file" accept="image/*" hidden>
+    </div>
+
     <div class="sch-layout">
       <aside class="sch-palette" id="sch-palette" aria-label="Bibliothèque de symboles"></aside>
       <div class="sch-canvas-wrap">
@@ -581,6 +591,7 @@ M834 80h400000v40h-400000z"></path></svg></span></span></span><span class="vlist
           </defs>
           <g id="sch-world">
             <rect x="-20000" y="-20000" width="40000" height="40000" fill="url(#sch-grid)"></rect>
+            <g id="sch-bgl"></g>
             <g id="sch-scene"></g>
             <g id="sch-overlay"></g>
           </g>

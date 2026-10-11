@@ -47,7 +47,35 @@
       }
     } catch (e) { /* données illisibles : on repart de zéro */ }
   }
-  function saveNow() { try { if (store) store.setItem(KEY, JSON.stringify(db)); } catch (e) { /* quota dépassé */ } }
+  let quotaWarned = false;
+  function warnQuota() {
+    if (quotaWarned) return;
+    quotaWarned = true;
+    window.alert('Le stockage de l’appareil est plein : les dernières modifications ne sont pas enregistrées. Exportez vos schémas ou supprimez un fond de plan volumineux.');
+  }
+  function saveNow() {
+    try { if (store) store.setItem(KEY, JSON.stringify(db)); } catch (e) { warnQuota(); }
+  }
+
+  // Fonds de plan : stockés à part (une clé par schéma) pour garder la base légère
+  const BGPREFIX = 'ef_bg_';
+  const bgCache = {};
+  function bgGet(id) {
+    if (bgCache[id] !== undefined) return bgCache[id];
+    let v = null;
+    try { v = store ? store.getItem(BGPREFIX + id) : null; } catch (e) { v = null; }
+    bgCache[id] = v;
+    return v;
+  }
+  function bgSet(id, data) {
+    try { if (store) store.setItem(BGPREFIX + id, data); } catch (e) { return false; }
+    bgCache[id] = data;
+    return true;
+  }
+  function bgDel(id) {
+    delete bgCache[id];
+    try { if (store) store.removeItem(BGPREFIX + id); } catch (e) { /* ignoré */ }
+  }
   let saveTimer = null;
   function save() {
     const s = schema();
@@ -256,6 +284,16 @@
     if (sel) o += selSVG(sel);
     const c = S.cursor;
     const k = S.view.k;
+    if (S.tool === 'bg') {
+      const cb = currentBg();
+      if (cb) {
+        const b = cb.b;
+        o += `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="none" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/>`;
+        for (const [hx, hy] of [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]]) {
+          o += `<rect x="${hx - 7 / k}" y="${hy - 7 / k}" width="${14 / k}" height="${14 / k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+        }
+      }
+    }
     // aperçu du symbole à poser
     if (S.tool === 'place' && S.placeKey && c) {
       const p = snapPt(c, STEP);
@@ -288,13 +326,42 @@
   const sceneG = svg.querySelector('#sch-scene');
   const overG = svg.querySelector('#sch-overlay');
   const worldG = svg.querySelector('#sch-world');
+  const bgG = svg.querySelector('#sch-bgl');
 
   function applyView() {
     worldG.setAttribute('transform', `translate(${rnd(S.view.x)} ${rnd(S.view.y)}) scale(${S.view.k})`);
   }
   function renderOverlay() { overG.innerHTML = overlaySVG(); }
+  // Fond de plan : l'élément <image> n'est reconstruit que si l'image change
+  let bgSig = '';
+  function currentBg() {
+    const s = schema();
+    if (!s || !s.bg || s.bg.visible === false) return null;
+    const data = bgGet(s.id);
+    return data ? { b: s.bg, data, id: s.id } : null;
+  }
+  function renderBg() {
+    const cb = currentBg();
+    if (!cb) { if (bgSig) { bgG.innerHTML = ''; bgSig = ''; } return; }
+    const sig = cb.id + ':' + cb.data.length;
+    let im = bgG.firstChild;
+    if (sig !== bgSig || !im) {
+      bgG.innerHTML = `<image preserveAspectRatio="none" href="${cb.data}"></image>`;
+      im = bgG.firstChild;
+      bgSig = sig;
+    }
+    im.setAttribute('x', cb.b.x); im.setAttribute('y', cb.b.y);
+    im.setAttribute('width', cb.b.w); im.setAttribute('height', cb.b.h);
+    im.setAttribute('opacity', cb.b.opacity);
+  }
+  function bgImageSVG() {
+    const cb = currentBg();
+    if (!cb) return '';
+    return `<image x="${cb.b.x}" y="${cb.b.y}" width="${cb.b.w}" height="${cb.b.h}" opacity="${cb.b.opacity}" preserveAspectRatio="none" href="${cb.data}"/>`;
+  }
   function render() {
     applyView();
+    renderBg();
     sceneG.innerHTML = sceneSVG(items());
     renderOverlay();
   }
@@ -385,8 +452,19 @@
     return { x: x0, y: y0, w: Math.max(x1 - x0, 1), h: Math.max(y1 - y0, 1) };
   }
 
-  function fitView() {
+  function fullBBox() {
     const bb = contentBBox(items());
+    const cb = currentBg();
+    if (!cb) return bb;
+    const b = cb.b;
+    if (!bb) return { x: b.x, y: b.y, w: b.w, h: b.h };
+    const x0 = Math.min(bb.x, b.x), y0 = Math.min(bb.y, b.y);
+    const x1 = Math.max(bb.x + bb.w, b.x + b.w), y1 = Math.max(bb.y + bb.h, b.y + b.h);
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+
+  function fitView() {
+    const bb = fullBBox();
     const W = svg.clientWidth || 800, H = svg.clientHeight || 500;
     if (!bb) { S.view = { x: 40, y: 40, k: 1 }; }
     else {
@@ -407,6 +485,7 @@
     window: 'Fenêtre : cliquez sur un mur pour la poser.',
     text: 'Texte : cliquez à l’endroit voulu (nom de pièce, repère…).',
     link: 'Liaison : faites glisser d’un symbole à un autre (commande vers éclairage, par exemple).',
+    bg: 'Fond de plan : faites glisser l’image pour la déplacer, les coins pour la redimensionner. Choisissez ensuite un autre outil.',
     place: 'Cliquez sur le plan pour poser le symbole (plusieurs fois de suite). Échap pour arrêter.',
   };
 
@@ -504,6 +583,19 @@
         renderOverlay();
         break;
       }
+      case 'bg': {
+        const cb = currentBg();
+        if (!cb) { S.drag = { mode: 'pan', cx: e.clientX, cy: e.clientY, vx: S.view.x, vy: S.view.y }; break; }
+        const b = cb.b, r = 14 / S.view.k;
+        let corner = null;
+        for (const [name, hx, hy] of [['tl', b.x, b.y], ['tr', b.x + b.w, b.y], ['bl', b.x, b.y + b.h], ['br', b.x + b.w, b.y + b.h]]) {
+          if (Math.abs(p.x - hx) <= r && Math.abs(p.y - hy) <= r) { corner = name; break; }
+        }
+        if (corner) S.drag = { mode: 'bgScale', corner, orig: { ...b } };
+        else if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) S.drag = { mode: 'bgMove', p0: p, orig: { ...b } };
+        else S.drag = { mode: 'pan', cx: e.clientX, cy: e.clientY, vx: S.view.x, vy: S.view.y };
+        break;
+      }
       case 'place':
         if (S.placeKey) addSymbol(S.placeKey, p);
         break;
@@ -564,6 +656,24 @@
       renderOverlay();
       return;
     }
+    if (d.mode === 'bgMove' || d.mode === 'bgScale') {
+      const b = schema().bg;
+      if (!b) return;
+      const o = d.orig;
+      if (d.mode === 'bgMove') {
+        b.x = rnd(o.x + p.x - d.p0.x); b.y = rnd(o.y + p.y - d.p0.y);
+      } else {
+        const left = d.corner.includes('l'), top = d.corner.includes('t');
+        const ox = left ? o.x + o.w : o.x, oy = top ? o.y + o.h : o.y;
+        const w = Math.max(40, Math.abs(p.x - ox));
+        const h = w * (o.h / o.w);
+        b.w = rnd(w); b.h = rnd(h);
+        b.x = rnd(left ? ox - w : ox); b.y = rnd(top ? oy - h : oy);
+      }
+      renderBg();
+      renderOverlay();
+      return;
+    }
     if (d.mode === 'wallEnd') {
       const w = findItem(d.id);
       if (!w) return;
@@ -588,6 +698,7 @@
     S.cursor = p;
 
     if (d.mode === 'pan') { rememberView(); return; }
+    if (d.mode === 'bgMove' || d.mode === 'bgScale') { save(); renderOverlay(); return; }
     if (d.mode === 'move' || d.mode === 'wallEnd') {
       const now = snapJSON();
       if (now !== d.before) { pushUndo(d.before); save(); }
@@ -766,6 +877,14 @@
     en('#sch-delete', !!it);
     en('#sch-undo', S.undo.length > 0);
     en('#sch-redo', S.redo.length > 0);
+    const sch = schema();
+    const hasBg = !!(sch && sch.bg && bgGet(sch.id));
+    en('#sch-bg-tool', hasBg);
+    en('#sch-bg-op', hasBg);
+    en('#sch-bg-toggle', hasBg);
+    en('#sch-bg-remove', hasBg);
+    $('#sch-bg-toggle').textContent = hasBg && sch.bg.visible === false ? 'Afficher' : 'Masquer';
+    if (hasBg) $('#sch-bg-op').value = Math.round((sch.bg.opacity || 0.5) * 100);
     $('#sch-hint').textContent = HINTS[S.tool] || '';
     $('#sch-snap').checked = S.snap;
     svg.style.cursor = S.tool === 'select' ? 'default' : 'crosshair';
@@ -787,6 +906,66 @@
     save();
   }
 
+  /* ---------- Fond de plan (image) ---------- */
+  const BG_MAX = 2200; // côté max en pixels après réduction (limite l'espace de stockage)
+
+  function applyBackground(data, nw, nh) {
+    const s = schema();
+    if (!s) return;
+    const k = S.view.k, W = svg.clientWidth || 800, H = svg.clientHeight || 500;
+    const w = Math.max(100, Math.min(nw, (W / k) * 0.85));
+    const h = (w * nh) / nw;
+    const cx = (W / 2 - S.view.x) / k, cy = (H / 2 - S.view.y) / k;
+    if (!bgSet(s.id, data)) {
+      window.alert('Image trop volumineuse pour le stockage de l’appareil. Essayez une image plus petite.');
+      return;
+    }
+    s.bg = { x: rnd(cx - w / 2), y: rnd(cy - h / 2), w: rnd(w), h: rnd(h), nw, nh, opacity: 0.5, visible: true };
+    save();
+    setTool('bg');
+    render();
+  }
+
+  function handleBgFile(file) {
+    if (!file || !(/^image\//.test(file.type) || /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name || ''))) {
+      window.alert('Fichier non pris en charge : choisissez une image (JPG, PNG ou WebP).');
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const nw0 = img.naturalWidth, nh0 = img.naturalHeight;
+      if (!nw0 || !nh0) { window.alert('Image illisible.'); return; }
+      const sc = Math.min(1, BG_MAX / Math.max(nw0, nh0));
+      const cw = Math.round(nw0 * sc), ch = Math.round(nh0 * sc);
+      try {
+        const c = document.createElement('canvas');
+        c.width = cw; c.height = ch;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+        ctx.drawImage(img, 0, 0, cw, ch);
+        applyBackground(c.toDataURL('image/jpeg', 0.85), cw, ch);
+      } catch (err) {
+        window.alert('Impossible de traiter cette image.');
+      }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); window.alert('Image illisible. Formats pris en charge : JPG, PNG, WebP.'); };
+    img.src = url;
+  }
+
+  function removeBackground() {
+    const s = schema();
+    if (!s || !s.bg) return;
+    if (!window.confirm('Retirer le fond de plan de ce schéma ?')) return;
+    delete s.bg;
+    bgDel(s.id);
+    if (S.tool === 'bg') S.tool = 'select';
+    save();
+    render();
+    updateUI();
+  }
+
   /* ---------- Gestion des schémas ---------- */
   function slug(n) { return (n || 'schema').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '') || 'schema'; }
   function download(blob, name) {
@@ -798,10 +977,10 @@
   }
   function exportSVGString() {
     const list = items();
-    const bb = contentBBox(list) || { x: 0, y: 0, w: 400, h: 300 };
+    const bb = fullBBox() || { x: 0, y: 0, w: 400, h: 300 };
     const m = 30;
     const x = Math.floor(bb.x - m), y = Math.floor(bb.y - m), w = Math.ceil(bb.w + 2 * m), h = Math.ceil(bb.h + 2 * m);
-    return { w, h, svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${w} ${h}" width="${w}" height="${h}"><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#fff"/>${sceneSVG(list)}</svg>` };
+    return { w, h, svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${w} ${h}" width="${w}" height="${h}"><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#fff"/>${bgImageSVG()}${sceneSVG(list)}</svg>` };
   }
   function exportSVG() {
     download(new Blob([exportSVGString().svg], { type: 'image/svg+xml' }), slug(schema().name) + '.svg');
@@ -823,7 +1002,8 @@
   }
   function saveFile() {
     const s = schema();
-    const data = { app: 'electroformules-schema', version: 1, schema: { name: s.name, items: s.items } };
+    const bgData = s.bg ? bgGet(s.id) : null;
+    const data = { app: 'electroformules-schema', version: 1, schema: { name: s.name, items: s.items, ...(bgData ? { bg: { ...s.bg, data: bgData } } : {}) } };
     download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), slug(s.name) + '.schema.json');
   }
 
@@ -859,6 +1039,14 @@
         const list = data.schema.items.map(cleanItem).filter(Boolean);
         const s = newSchema(String(data.schema.name || 'Schéma importé').slice(0, 60));
         s.items = list;
+        const rb = data.schema.bg;
+        if (rb && typeof rb.data === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(rb.data) &&
+            [rb.x, rb.y, rb.w, rb.h].every(num) && rb.w > 0 && rb.h > 0) {
+          if (bgSet(s.id, rb.data)) {
+            s.bg = { x: rb.x, y: rb.y, w: rb.w, h: rb.h, nw: num(rb.nw) ? rb.nw : rb.w, nh: num(rb.nh) ? rb.nh : rb.h,
+              opacity: num(rb.opacity) ? Math.max(0.1, Math.min(1, rb.opacity)) : 0.5, visible: rb.visible !== false };
+          }
+        }
         openSchema(s.id, false);
         window.alert('Import réussi : ' + list.length + ' élément(s).');
       } catch (err) {
@@ -894,6 +1082,30 @@
     $('#sch-edit').addEventListener('click', () => editText());
     $('#sch-delete').addEventListener('click', deleteSel);
 
+    $('#sch-bg-import').addEventListener('click', () => $('#sch-bg-file').click());
+    $('#sch-bg-file').addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) handleBgFile(f);
+      e.target.value = '';
+    });
+    $('#sch-bg-op').addEventListener('input', (e) => {
+      const s = schema();
+      if (!s || !s.bg) return;
+      s.bg.opacity = Math.max(0.1, Math.min(1, Number(e.target.value) / 100));
+      renderBg();
+      save();
+    });
+    $('#sch-bg-toggle').addEventListener('click', () => {
+      const s = schema();
+      if (!s || !s.bg) return;
+      s.bg.visible = s.bg.visible === false;
+      if (s.bg.visible === false && S.tool === 'bg') S.tool = 'select';
+      save();
+      render();
+      updateUI();
+    });
+    $('#sch-bg-remove').addEventListener('click', removeBackground);
+
     $('#sch-select').addEventListener('change', (e) => openSchema(e.target.value, false));
     $('#sch-new').addEventListener('click', () => {
       const name = window.prompt('Nom du nouveau schéma :', 'Schéma ' + (db.list.length + 1));
@@ -910,12 +1122,14 @@
       const s = schema();
       const c = newSchema((s.name + ' (copie)').slice(0, 60));
       c.items = clone(s.items);
+      if (s.bg && bgGet(s.id) && bgSet(c.id, bgGet(s.id))) c.bg = clone(s.bg);
       openSchema(c.id, false);
     });
     $('#sch-del').addEventListener('click', () => {
       const s = schema();
       if (!window.confirm('Supprimer le schéma « ' + s.name + ' » ? Cette action est définitive.')) return;
       db.list = db.list.filter((x) => x.id !== s.id);
+      bgDel(s.id);
       if (!db.list.length) newSchema('Schéma 1');
       openSchema(db.list[0].id, false);
     });
@@ -974,7 +1188,7 @@
   window.SchemasEditor = {
     show,
     // utilitaires exposés pour les tests
-    _state: S, _db: () => db, _exportSVG: exportSVGString,
+    _state: S, _db: () => db, _exportSVG: exportSVGString, _applyBackground: applyBackground, _bgGet: bgGet, _handleBgFile: handleBgFile,
   };
 
   if (!root.hidden) show();

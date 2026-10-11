@@ -80,20 +80,18 @@
       name: 'Points lumineux',
       items: [
         {
-          key: 'pl', name: 'Point lumineux', b: [-12, -18, 12, 18],
-          draw: () => circ(10) + hourglass(1) + line(0, -10, 0, -16) + line(0, 10, 0, 16),
+          // Croix épaisse (d'après l'image fournie)
+          key: 'pl', name: 'Point lumineux', b: [-12, -12, 12, 12],
+          draw: () => line(-8.5, -9.5, 8.5, 9.5, 'stroke-width="3.4" stroke-linecap="butt"') +
+            line(8.5, -9.5, -8.5, 9.5, 'stroke-width="3.4" stroke-linecap="butt"'),
         },
         { key: 'spot', name: 'Spot', b: [-17, -17, 17, 17], draw: () => circ(15) + hourglass(1.5) },
         {
-          key: 'applique', name: 'Applique', b: [-18, -12, 18, 10],
-          draw: () => {
-            let s = `<path d="M-15 6 A15 15 0 0 1 15 6 Z"/>` + line(-18, 6, 18, 6);
-            for (const a of [40, 70, 110, 140]) {
-              const r = (a * Math.PI) / 180;
-              s += line(0, 6, +(15 * Math.cos(r)).toFixed(2), +(6 - 15 * Math.sin(r)).toFixed(2), 'stroke-width="1.2"');
-            }
-            return s;
-          },
+          // Croix épaisse soulignée d'une barre (d'après l'image fournie)
+          key: 'applique', name: 'Applique', b: [-12, -14, 12, 18],
+          draw: () => line(-8.5, -11.5, 8.5, 7.5, 'stroke-width="3.4" stroke-linecap="butt"') +
+            line(8.5, -11.5, -8.5, 7.5, 'stroke-width="3.4" stroke-linecap="butt"') +
+            line(-9.8, 14, 9.8, 14, 'stroke-width="2.4" stroke-linecap="butt"'),
         },
         {
           key: 'lampe', name: 'Éclairage lampe', b: [-12, -18, 12, 18],
