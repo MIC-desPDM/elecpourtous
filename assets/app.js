@@ -1519,3 +1519,21 @@ if ('serviceWorker' in navigator) {
     /* le stockage n'est pas disponible (aperçu intégré) : le mode hors ligne ne s'active pas */
   });
 }
+
+
+/* ---------- Sections (onglets) : Formules de MELEC / Schémas Architectural ---------- */
+(function () {
+  const tabs = [...document.querySelectorAll('[data-view-tab]')];
+  const searchWrap = document.querySelector('.search-wrap');
+  function showView(name) {
+    document.querySelectorAll('[data-view]').forEach((el) => { el.hidden = el.dataset.view !== name; });
+    tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.viewTab === name)));
+    if (searchWrap) searchWrap.hidden = name !== 'formulas';
+    try { window.localStorage.setItem('ef_view', name); } catch (e) { /* stockage indisponible */ }
+    if (name === 'schemas' && window.SchemasEditor) window.SchemasEditor.show();
+  }
+  tabs.forEach((t) => t.addEventListener('click', () => showView(t.dataset.viewTab)));
+  let start = 'formulas';
+  try { if (window.localStorage.getItem('ef_view') === 'schemas') start = 'schemas'; } catch (e) { /* ignoré */ }
+  showView(start);
+})();

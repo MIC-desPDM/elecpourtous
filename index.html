@@ -35,9 +35,15 @@
         <button class="icon-btn" data-theme-toggle="" aria-label="Passer en mode clair"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path></svg></button>
       </div>
     </div>
+    <nav class="view-tabs" aria-label="Sections">
+      <div class="view-tabs-inner" role="tablist">
+        <button type="button" role="tab" class="view-tab" data-view-tab="formulas" aria-selected="true">Formules de MELEC</button>
+        <button type="button" role="tab" class="view-tab" data-view-tab="schemas" aria-selected="false">Schémas Architectural</button>
+      </div>
+    </nav>
   </header>
 
-  <main id="main">
+  <main id="main" data-view="formulas">
     <div class="toolbar">
       <nav class="chips" id="chips" aria-label="Catégories"><button class="chip" data-filter="all" aria-pressed="true">Tout</button><button class="chip" data-filter="fav" aria-pressed="false">Favoris</button><button class="chip" data-filter="base" aria-pressed="false">Lois fondamentales<span class="chip-count">9</span></button><button class="chip" data-filter="mono" aria-pressed="false">Courant alternatif<span class="chip-count">12</span></button><button class="chip" data-filter="tri" aria-pressed="false">Triphasé et lignes<span class="chip-count">7</span></button><button class="chip" data-filter="energie" aria-pressed="false">Énergie<span class="chip-count">2</span></button><button class="chip" data-filter="moteur" aria-pressed="false">Moteurs<span class="chip-count">5</span></button><button class="chip" data-filter="transfo" aria-pressed="false">Transformateurs<span class="chip-count">2</span></button></nav>
       <button class="btn btn-primary" id="btn-add">
@@ -515,7 +521,76 @@ M834 80h400000v40h-400000z"></path></svg></span></span></span><span class="vlist
     </div>
   </main>
 
-  <footer class="site-footer">
+  <!-- ===== Section : Schémas Architectural ===== -->
+  <main id="main-schemas" class="schemas-main" data-view="schemas" hidden>
+    <div class="sch-top">
+      <label class="sch-select"><span class="sr-only">Schéma en cours</span><select id="sch-select"></select></label>
+      <div class="sch-top-actions">
+        <button type="button" class="btn btn-ghost btn-sm" id="sch-new">Nouveau</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="sch-rename">Renommer</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="sch-copy">Dupliquer</button>
+        <button type="button" class="btn btn-danger btn-sm" id="sch-del">Supprimer</button>
+        <span class="sch-sep"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="sch-png" title="Exporter en image PNG">PNG</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="sch-svgfile" title="Exporter en SVG">SVG</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="sch-savefile" title="Sauvegarder le schéma dans un fichier">Sauvegarder</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="sch-import" title="Ouvrir un fichier de schéma">Importer</button>
+        <input type="file" id="sch-file" accept="application/json,.json" hidden>
+      </div>
+    </div>
+
+    <div class="sch-tools" id="sch-tools" role="toolbar" aria-label="Outils de dessin">
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="select" aria-pressed="true">Sélection</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="wall" aria-pressed="false">Mur</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="room" aria-pressed="false">Pièce</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="door" aria-pressed="false">Porte</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="window" aria-pressed="false">Fenêtre</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="text" aria-pressed="false">Texte</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="link" aria-pressed="false">Liaison</button>
+      <span class="sch-sep"></span>
+      <label class="sch-snap"><input type="checkbox" id="sch-snap" checked> Grille magnétique</label>
+      <span class="sch-sep"></span>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-undo" title="Annuler (Ctrl+Z)">Annuler</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-redo" title="Rétablir (Ctrl+Y)">Rétablir</button>
+      <span class="sch-sep"></span>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-zoom-out" aria-label="Dézoomer">−</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-zoom-in" aria-label="Zoomer">+</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-fit">Ajuster</button>
+    </div>
+
+    <div class="sch-actions" id="sch-actions" role="toolbar" aria-label="Actions sur l'élément sélectionné">
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-rot-l" title="Pivoter à gauche (Maj+R)">⟲ Pivoter</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-rot-r" title="Pivoter à droite (R)">⟳ Pivoter</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-flip">Miroir porte</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-size-m">Taille −</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-size-p">Taille +</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-edit">Modifier le texte</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-dup" title="Dupliquer (Ctrl+D)">Dupliquer</button>
+      <button type="button" class="btn btn-danger btn-sm" id="sch-delete" title="Supprimer (Suppr)">Supprimer</button>
+    </div>
+
+    <div class="sch-layout">
+      <aside class="sch-palette" id="sch-palette" aria-label="Bibliothèque de symboles"></aside>
+      <div class="sch-canvas-wrap">
+        <svg id="sch-svg" role="img" aria-label="Zone de dessin du schéma">
+          <defs>
+            <pattern id="sch-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+              <circle cx="0" cy="0" r="1.1" fill="#c3c9d4"/><circle cx="20" cy="0" r="1.1" fill="#c3c9d4"/>
+              <circle cx="0" cy="20" r="1.1" fill="#c3c9d4"/><circle cx="20" cy="20" r="1.1" fill="#c3c9d4"/>
+            </pattern>
+          </defs>
+          <g id="sch-world">
+            <rect x="-20000" y="-20000" width="40000" height="40000" fill="url(#sch-grid)"></rect>
+            <g id="sch-scene"></g>
+            <g id="sch-overlay"></g>
+          </g>
+        </svg>
+      </div>
+    </div>
+    <p class="sch-hint" id="sch-hint"></p>
+  </main>
+
+  <footer class="site-footer" data-view="formulas">
     <p>Vos formules personnalisées et vos favoris sont enregistrés uniquement sur votre appareil.</p>
     <div class="footer-actions">
       <button class="btn btn-ghost" id="btn-export">
@@ -598,6 +673,8 @@ M834 80h400000v40h-400000z"></path></svg></span></span></span><span class="vlist
 
   <script defer="" src="assets/katex.min.js"></script>
   <script defer="" src="assets/app.js"></script>
+  <script defer="" src="assets/schemas-symbols.js"></script>
+  <script defer="" src="assets/schemas.js"></script>
 
 
 </body></html>
