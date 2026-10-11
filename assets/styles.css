@@ -746,7 +746,7 @@ dialog h2 {
 .sch-sep { width: 1px; align-self: stretch; min-height: 22px; background: var(--divider); margin: 0 4px; }
 .sch-snap { display: inline-flex; gap: 6px; align-items: center; font-size: 0.8125rem; color: var(--text-muted); cursor: pointer; }
 
-.sch-layout { display: grid; grid-template-columns: 270px 1fr; gap: 12px; height: calc(100dvh - 390px); min-height: 460px; }
+.sch-layout { display: grid; grid-template-columns: 270px 1fr; gap: 12px; height: calc(100dvh - 435px); min-height: 460px; }
 .sch-palette {
   overflow: auto;
   border: 1px solid var(--border);
@@ -784,3 +784,24 @@ dialog h2 {
 .sch-bgbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
 .sch-bglabel { font-size: 0.8125rem; font-weight: 600; color: var(--text-muted); margin-right: 4px; }
 .sch-bgbar input[type='range'] { width: 110px; vertical-align: middle; }
+
+/* ---------- Murs et matériaux ---------- */
+.sch-wallbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.sch-thval { min-width: 2.2em; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sch-wallhint { font-size: 0.75rem; color: var(--text-muted); margin-left: 6px; }
+.sch-group-main { font-size: 0.75rem; color: var(--text); margin-top: 6px; padding-bottom: 4px; border-bottom: 1px solid var(--divider); }
+.sch-note { font-size: 0.6875rem; color: var(--text-muted); margin: 6px 0 4px; line-height: 1.3; }
+.sch-subgroup { font-size: 0.6875rem; font-weight: 600; color: var(--text-muted); margin: 10px 0 5px; }
+.sch-mats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.sch-mat {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 6px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.6875rem; line-height: 1.2; text-align: center;
+  color: var(--text-muted);
+}
+.sch-mat svg { background: #fff; border-radius: 4px; }
+.sch-mat:hover { border-color: var(--accent); color: var(--text); }
+.sch-mat.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--text); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }

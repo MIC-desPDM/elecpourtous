@@ -1,6 +1,6 @@
 /* Service worker : fonctionnement hors ligne.
    Incrémenter CACHE_VERSION à chaque modification des fichiers pour forcer la mise à jour. */
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const CACHE = 'electroformules-' + CACHE_VERSION;
 const FILES = [
   "./",
@@ -31,6 +31,7 @@ const FILES = [
   "assets/katex.min.css",
   "assets/katex.min.js",
   "assets/schemas-symbols.js",
+  "assets/schemas-materials.js",
   "assets/schemas.js",
   "assets/styles.css",
   "icons/icon-180.png",

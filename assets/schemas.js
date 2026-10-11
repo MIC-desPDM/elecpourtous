@@ -11,11 +11,13 @@
   'use strict';
 
   const SYM = window.SchSymbols;
+  const MAT = window.SchMaterials;
   const root = document.getElementById('main-schemas');
-  if (!SYM || !root) return;
+  if (!SYM || !MAT || !root) return;
 
   const $ = (s) => root.querySelector(s);
   const svg = $('#sch-svg');
+  svg.querySelector('defs').insertAdjacentHTML('beforeend', MAT.defsSVG());   // motifs des matériaux
 
   const GRID = 20;          // pas de la grille (murs)
   const STEP = 10;          // pas d'accrochage des symboles
@@ -23,7 +25,8 @@
   const WALL_COLOR = '#3b3b3b';
   const LINK_COLOR = '#5a6b86';
   const SEL = '#2f7df6';
-  const WALL_W = 8;
+  const WALL_TH = 8;        // épaisseur des murs créés avant l'ajout des matériaux
+  const LINE = '#222';
 
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const uid = () => 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -92,6 +95,8 @@
     sel: null,
     view: { x: 40, y: 40, k: 1 },
     snap: true,
+    mat: 'plein',          // matériau des prochains murs
+    th: 12,                // épaisseur des prochains murs
     draft: null,
     cursor: null,
     drag: null,
@@ -187,8 +192,10 @@
     if (best) {
       it.rot = rnd((Math.atan2(best.w.y2 - best.w.y1, best.w.x2 - best.w.x1) * 180) / Math.PI);
       c = { x: best.qx, y: best.qy };
+      it.th = best.w.th || WALL_TH;
     } else {
       c = snapPt(c, STEP);
+      it.th = S.th;
     }
     const a = rad(it.rot || 0);
     it.x = rnd(c.x - Math.cos(a) * it.len / 2);
@@ -204,23 +211,43 @@
     return { x: e.x, y: e.y };
   }
 
-  function wallSVG(w) {
-    return `<line x1="${w.x1}" y1="${w.y1}" x2="${w.x2}" y2="${w.y2}" stroke="${WALL_COLOR}" stroke-width="${WALL_W}" stroke-linecap="square"/>`;
+  // Un mur est un rectangle dans son repère local (le motif suit donc la direction du mur).
+  // Passe 1 : contours ; passe 2 : remplissages. Les angles et les T se raccordent proprement.
+  function wallGeom(w) {
+    const dx = w.x2 - w.x1, dy = w.y2 - w.y1;
+    return { L: Math.hypot(dx, dy), ang: rnd((Math.atan2(dy, dx) * 180) / Math.PI), th: w.th || WALL_TH };
+  }
+  function wallRect(w, attrs) {
+    const g = wallGeom(w);
+    return `<g transform="translate(${w.x1} ${w.y1}) rotate(${g.ang})"><rect x="${-g.th / 2}" y="${-g.th / 2}" width="${rnd(g.L + g.th)}" height="${g.th}" ${attrs}/></g>`;
+  }
+  function wallOutlineSVG(w) {
+    const m = w.mat || 'plein';
+    if (m === 'plein' || m === 'verre') return '';
+    return wallRect(w, `fill="#fff" stroke="${LINE}" stroke-width="3" stroke-linejoin="miter"`);
+  }
+  function wallFillSVG(w) {
+    const f = MAT.fill(w.mat || 'plein');
+    if (f === null) {
+      return `<line x1="${w.x1}" y1="${w.y1}" x2="${w.x2}" y2="${w.y2}" stroke="${LINE}" stroke-width="1.8" stroke-linecap="square"/>`;
+    }
+    return (f.startsWith('url(') ? wallRect(w, 'fill="#fff"') : '') + wallRect(w, `fill="${f}"`);
   }
 
   function openingSVG(o) {
-    const L = o.len;
-    let g = `<rect x="0" y="-7" width="${L}" height="14" fill="#fff"/>`;
+    const L = o.len, th = o.th || WALL_TH, h = th / 2;
+    let g = `<rect x="0" y="${-(h + 2)}" width="${L}" height="${th + 4}" fill="#fff"/>`;
     if (o.t === 'door') {
       g += `<g${o.flip ? ' transform="scale(1 -1)"' : ''}>` +
         `<line x1="0" y1="0" x2="0" y2="${-L}" stroke="${INK}" stroke-width="2.4" stroke-linecap="round"/>` +
         `<path d="M0 ${-L} A${L} ${L} 0 0 1 ${L} 0" fill="none" stroke="${INK}" stroke-width="1.2" stroke-dasharray="4 3"/></g>`;
     } else {
-      g += `<rect x="0" y="-4" width="${L}" height="8" fill="#fff" stroke="${INK}" stroke-width="1.4"/>` +
+      g += `<line x1="0" y1="${-h}" x2="${L}" y2="${-h}" stroke="${INK}" stroke-width="1.3"/>` +
+        `<line x1="0" y1="${h}" x2="${L}" y2="${h}" stroke="${INK}" stroke-width="1.3"/>` +
         `<line x1="0" y1="0" x2="${L}" y2="0" stroke="${INK}" stroke-width="1"/>`;
     }
-    g += `<line x1="0" y1="-5" x2="0" y2="5" stroke="${WALL_COLOR}" stroke-width="2"/>` +
-      `<line x1="${L}" y1="-5" x2="${L}" y2="5" stroke="${WALL_COLOR}" stroke-width="2"/>`;
+    g += `<line x1="0" y1="${-h}" x2="0" y2="${h}" stroke="${LINE}" stroke-width="1.6"/>` +
+      `<line x1="${L}" y1="${-h}" x2="${L}" y2="${h}" stroke="${LINE}" stroke-width="1.6"/>`;
     return `<g transform="translate(${o.x} ${o.y}) rotate(${o.rot || 0})">${g}</g>`;
   }
 
@@ -242,22 +269,24 @@
   }
 
   function sceneSVG(list) {
-    let walls = '', open = '', links = '', syms = '', texts = '';
+    let walls = '', open = '', links = '', syms = '', texts = '', wallsFill = '';
     for (const it of list) {
-      if (it.t === 'wall') walls += wallSVG(it);
-      else if (it.t === 'door' || it.t === 'window') open += openingSVG(it);
+      if (it.t === 'door' || it.t === 'window') open += openingSVG(it);
       else if (it.t === 'link') links += linkSVG(list, it);
       else if (it.t === 'sym') syms += symSVG(it);
       else if (it.t === 'text') texts += textSVG(it);
     }
-    return walls + open + links + syms + texts;
+    // Les murs épais sont dessinés en dernier : une cloison fine s'arrête proprement contre un mur épais
+    const wl = list.filter((i) => i.t === 'wall').sort((a, b) => (a.th || WALL_TH) - (b.th || WALL_TH));
+    for (const w of wl) { walls += wallOutlineSVG(w); wallsFill += wallFillSVG(w); }
+    return walls + wallsFill + open + links + syms + texts;
   }
 
   function selSVG(it) {
     const dash = `fill="none" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"`;
     const handle = (x, y) => `<circle cx="${x}" cy="${y}" r="${7 / S.view.k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
     if (it.t === 'wall') {
-      return `<line x1="${it.x1}" y1="${it.y1}" x2="${it.x2}" y2="${it.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="${WALL_W + 6}" stroke-linecap="round"/>` +
+      return `<line x1="${it.x1}" y1="${it.y1}" x2="${it.x2}" y2="${it.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="${(it.th || WALL_TH) + 6}" stroke-linecap="round"/>` +
         handle(it.x1, it.y1) + handle(it.x2, it.y2);
     }
     if (it.t === 'link') {
@@ -273,8 +302,9 @@
       return `<g transform="translate(${it.x} ${it.y}) rotate(${it.rot || 0}) scale(${it.s || 1})"><rect x="${x0 - 2}" y="${y0 - 2}" width="${x1 - x0 + 4}" height="${y1 - y0 + 4}" ${dash}/></g>`;
     }
     // porte / fenêtre
-    const top = it.t === 'door' ? (it.flip ? -9 : -(it.len + 3)) : -9;
-    const hgt = it.t === 'door' ? it.len + 12 : 18;
+    const hh = (it.th || WALL_TH) / 2 + 4;
+    const top = it.t === 'door' ? (it.flip ? -hh : -(it.len + 3)) : -hh;
+    const hgt = it.t === 'door' ? it.len + hh + 3 : hh * 2;
     return `<g transform="translate(${it.x} ${it.y}) rotate(${it.rot || 0})"><rect x="-3" y="${top}" width="${it.len + 6}" height="${hgt}" ${dash}/></g>`;
   }
 
@@ -307,12 +337,12 @@
     // murs en cours de tracé
     if (S.tool === 'wall' && S.draft) {
       const q = c ? snapPt(c, GRID) : S.draft;
-      o += `<line x1="${S.draft.x}" y1="${S.draft.y}" x2="${q.x}" y2="${q.y}" stroke="${SEL}" stroke-opacity="0.6" stroke-width="${WALL_W}" stroke-linecap="square"/>`;
+      o += `<line x1="${S.draft.x}" y1="${S.draft.y}" x2="${q.x}" y2="${q.y}" stroke="${SEL}" stroke-opacity="0.6" stroke-width="${S.th}" stroke-linecap="square"/>`;
       o += `<circle cx="${S.draft.x}" cy="${S.draft.y}" r="${5 / k}" fill="${SEL}"/>`;
     }
     if (S.drag && S.drag.mode === 'room' && c) {
       const a = S.drag.a, q = snapPt(c, GRID);
-      o += `<rect x="${Math.min(a.x, q.x)}" y="${Math.min(a.y, q.y)}" width="${Math.abs(q.x - a.x)}" height="${Math.abs(q.y - a.y)}" fill="${SEL}" fill-opacity="0.08" stroke="${SEL}" stroke-width="${WALL_W}" stroke-opacity="0.6" stroke-linejoin="miter"/>`;
+      o += `<rect x="${Math.min(a.x, q.x)}" y="${Math.min(a.y, q.y)}" width="${Math.abs(q.x - a.x)}" height="${Math.abs(q.y - a.y)}" fill="${SEL}" fill-opacity="0.08" stroke="${SEL}" stroke-width="${S.th}" stroke-opacity="0.6" stroke-linejoin="miter"/>`;
     }
     if (S.drag && S.drag.mode === 'link' && c) {
       const a = resolveEnd(items(), S.drag.a);
@@ -395,7 +425,7 @@
       const it = list[i];
       if (it.t !== 'door' && it.t !== 'window') continue;
       const l = toLocal(it, p);
-      if (l.x >= -tol && l.x <= it.len + tol && Math.abs(l.y) <= 9 + tol) return it;
+      if (l.x >= -tol && l.x <= it.len + tol && Math.abs(l.y) <= Math.max(9, (it.th || WALL_TH) / 2 + 3) + tol) return it;
     }
     for (let i = list.length - 1; i >= 0; i--) {
       const it = list[i];
@@ -406,7 +436,7 @@
     for (let i = list.length - 1; i >= 0; i--) {
       const it = list[i];
       if (it.t !== 'wall') continue;
-      if (distSeg(p, it.x1, it.y1, it.x2, it.y2).d <= WALL_W / 2 + tol) return it;
+      if (distSeg(p, it.x1, it.y1, it.x2, it.y2).d <= (it.th || WALL_TH) / 2 + tol) return it;
     }
     return null;
   }
@@ -443,7 +473,7 @@
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     const add = (x, y) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
     for (const it of list) {
-      if (it.t === 'wall') { add(it.x1 - 5, it.y1 - 5); add(it.x2 + 5, it.y2 + 5); }
+      if (it.t === 'wall') { const m = (it.th || WALL_TH) / 2 + 3; add(it.x1 - m, it.y1 - m); add(it.x2 + m, it.y2 + m); }
       else if (it.t === 'sym') { const [a, b, c, d] = SYM.map[it.key].b; const s = it.s || 1, m = Math.max(Math.abs(a), Math.abs(b), Math.abs(c), Math.abs(d)) * s; add(it.x - m, it.y - m); add(it.x + m, it.y + m); }
       else if (it.t === 'text') { const [a, b, c, d] = textBox(it); add(a, b); add(c, d); }
       else if (it.t === 'door' || it.t === 'window') { add(it.x - it.len, it.y - it.len); add(it.x + it.len, it.y + it.len); }
@@ -479,7 +509,7 @@
   /* ---------- Outils ---------- */
   const HINTS = {
     select: 'Sélection : cliquez un élément pour le déplacer ; faites glisser le fond pour vous déplacer ; molette ou pincement pour zoomer.',
-    wall: 'Mur : cliquez pour poser le point de départ, puis cliquez à chaque angle. Double-clic ou Échap pour terminer.',
+    wall: 'Mur : cliquez pour poser le point de départ, puis cliquez à chaque angle. Double-clic ou Échap pour terminer. Matériau : palette ; épaisseur : barre « Murs ».',
     room: 'Pièce : faites glisser d’un angle à l’angle opposé pour créer les 4 murs.',
     door: 'Porte : cliquez sur un mur pour la poser (elle s’aligne sur le mur). « Miroir » change le sens d’ouverture.',
     window: 'Fenêtre : cliquez sur un mur pour la poser.',
@@ -508,7 +538,7 @@
     updateUI();
   }
   function addWall(a, b) {
-    mutate(() => items().push({ id: uid(), t: 'wall', x1: a.x, y1: a.y, x2: b.x, y2: b.y }));
+    mutate(() => items().push({ id: uid(), t: 'wall', x1: a.x, y1: a.y, x2: b.x, y2: b.y, mat: S.mat, th: S.th }));
   }
 
   /* ---------- Souris / toucher ---------- */
@@ -728,10 +758,8 @@
         const x0 = Math.min(a.x, q.x), x1 = Math.max(a.x, q.x), y0 = Math.min(a.y, q.y), y1 = Math.max(a.y, q.y);
         mutate(() => {
           const l = items();
-          l.push({ id: uid(), t: 'wall', x1: x0, y1: y0, x2: x1, y2: y0 });
-          l.push({ id: uid(), t: 'wall', x1: x1, y1: y0, x2: x1, y2: y1 });
-          l.push({ id: uid(), t: 'wall', x1: x1, y1: y1, x2: x0, y2: y1 });
-          l.push({ id: uid(), t: 'wall', x1: x0, y1: y1, x2: x0, y2: y0 });
+          const mk = (ax, ay, bx, by) => l.push({ id: uid(), t: 'wall', x1: ax, y1: ay, x2: bx, y2: by, mat: S.mat, th: S.th });
+          mk(x0, y0, x1, y0); mk(x1, y0, x1, y1); mk(x1, y1, x0, y1); mk(x0, y1, x0, y0);
         });
         setTimeout(() => {
           const name = window.prompt('Nom de la pièce (facultatif) :', '');
@@ -845,9 +873,56 @@
     });
   }
 
+  /* ---------- Murs : matériau et épaisseur ---------- */
+  const selWall = () => { const it = sel(); return it && it.t === 'wall' ? it : null; };
+  const clampTh = (v) => Math.max(2, Math.min(60, v));
+
+  // Aligne l'épaisseur des portes / fenêtres sur celle du mur qui les porte
+  function syncOpenings() {
+    const list = items();
+    for (const o of list) {
+      if (o.t !== 'door' && o.t !== 'window') continue;
+      const c = openingCenter(o);
+      for (const w of list) {
+        if (w.t === 'wall' && distSeg(c, w.x1, w.y1, w.x2, w.y2).d <= 2) o.th = w.th || WALL_TH;
+      }
+    }
+  }
+  function setMaterial(key) {
+    if (!MAT.map[key]) return;
+    const w = selWall();
+    S.mat = key;
+    if (w) mutate(() => { w.mat = key; });
+    else updateUI();
+  }
+  function changeThickness(dir) {
+    const w = selWall();
+    const nt = clampTh((w ? (w.th || WALL_TH) : S.th) + 2 * dir);
+    S.th = nt;
+    if (w) mutate(() => { w.th = nt; syncOpenings(); });
+    else updateUI();
+  }
+  function applyAllWalls() {
+    const walls = items().filter((i) => i.t === 'wall');
+    if (!walls.length) return;
+    const src = selWall();
+    const mat = src ? (src.mat || 'plein') : S.mat;
+    const th = src ? (src.th || WALL_TH) : S.th;
+    mutate(() => { for (const w of walls) { w.mat = mat; w.th = th; } syncOpenings(); });
+  }
+
   /* ---------- Interface ---------- */
   function paletteHTML() {
-    let h = '';
+    let h = '<h3 class="sch-group sch-group-main">Matériaux des murs</h3>' +
+      '<p class="sch-note">Cliquez un matériau : il s’applique au mur sélectionné et aux prochains murs.</p>';
+    for (const g of MAT.groups) {
+      h += `<h4 class="sch-subgroup">${esc(g.name)}</h4><div class="sch-mats">`;
+      for (const it of g.items) {
+        h += `<button type="button" class="sch-mat" data-mat="${it.key}" title="${esc(it.name)}" aria-label="${esc(it.name)}">${MAT.swatch(it.key)}<span>${esc(it.name)}</span></button>`;
+      }
+      h += '</div>';
+    }
+    h += '<h3 class="sch-group sch-group-main" style="margin-top:18px">Symboles électriques</h3>';
     for (const g of SYM.groups) {
       h += `<h3 class="sch-group">${esc(g.name)}</h3><div class="sch-syms">`;
       for (const d of g.items) {
@@ -877,6 +952,11 @@
     en('#sch-delete', !!it);
     en('#sch-undo', S.undo.length > 0);
     en('#sch-redo', S.redo.length > 0);
+    const wsel = selWall();
+    const curMat = wsel ? (wsel.mat || 'plein') : S.mat;
+    root.querySelectorAll('.sch-mat').forEach((b) => b.classList.toggle('is-active', b.dataset.mat === curMat));
+    $('#sch-th-val').textContent = String(wsel ? (wsel.th || WALL_TH) : S.th);
+    en('#sch-mat-all', items().some((i) => i.t === 'wall'));
     const sch = schema();
     const hasBg = !!(sch && sch.bg && bgGet(sch.id));
     en('#sch-bg-tool', hasBg);
@@ -980,7 +1060,7 @@
     const bb = fullBBox() || { x: 0, y: 0, w: 400, h: 300 };
     const m = 30;
     const x = Math.floor(bb.x - m), y = Math.floor(bb.y - m), w = Math.ceil(bb.w + 2 * m), h = Math.ceil(bb.h + 2 * m);
-    return { w, h, svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${w} ${h}" width="${w}" height="${h}"><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#fff"/>${bgImageSVG()}${sceneSVG(list)}</svg>` };
+    return { w, h, svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${w} ${h}" width="${w}" height="${h}"><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#fff"/>${bgImageSVG()}<defs>${MAT.defsSVG()}</defs>${sceneSVG(list)}</svg>` };
   }
   function exportSVG() {
     download(new Blob([exportSVGString().svg], { type: 'image/svg+xml' }), slug(schema().name) + '.svg');
@@ -1012,10 +1092,14 @@
     if (!it || typeof it !== 'object') return null;
     const id = typeof it.id === 'string' && it.id ? it.id : uid();
     switch (it.t) {
-      case 'wall': return [it.x1, it.y1, it.x2, it.y2].every(num) ? { id, t: 'wall', x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2 } : null;
+      case 'wall':
+        if (![it.x1, it.y1, it.x2, it.y2].every(num)) return null;
+        return { id, t: 'wall', x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2,
+          ...(typeof it.mat === 'string' && MAT.map[it.mat] ? { mat: it.mat } : {}),
+          ...(num(it.th) ? { th: clampTh(it.th) } : {}) };
       case 'door': case 'window':
         if (![it.x, it.y, it.len].every(num)) return null;
-        return { id, t: it.t, x: it.x, y: it.y, rot: num(it.rot) ? it.rot : 0, len: Math.max(20, Math.min(200, it.len)), ...(it.t === 'door' ? { flip: !!it.flip } : {}) };
+        return { id, t: it.t, x: it.x, y: it.y, rot: num(it.rot) ? it.rot : 0, len: Math.max(20, Math.min(200, it.len)), ...(num(it.th) ? { th: clampTh(it.th) } : {}), ...(it.t === 'door' ? { flip: !!it.flip } : {}) };
       case 'sym':
         if (!SYM.map[it.key] || ![it.x, it.y].every(num)) return null;
         return { id, t: 'sym', key: it.key, x: it.x, y: it.y, rot: num(it.rot) ? it.rot : 0, s: num(it.s) ? Math.max(0.4, Math.min(3, it.s)) : 1 };
@@ -1063,9 +1147,14 @@
     bound = true;
     $('#sch-palette').innerHTML = paletteHTML();
     $('#sch-palette').addEventListener('click', (e) => {
+      const m = e.target.closest('.sch-mat');
+      if (m) { setMaterial(m.dataset.mat); return; }
       const b = e.target.closest('.sch-sym');
       if (b) setTool('place', b.dataset.sym);
     });
+    $('#sch-th-m').addEventListener('click', () => changeThickness(-1));
+    $('#sch-th-p').addEventListener('click', () => changeThickness(1));
+    $('#sch-mat-all').addEventListener('click', applyAllWalls);
     root.querySelectorAll('[data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
     $('#sch-snap').addEventListener('change', (e) => { S.snap = e.target.checked; });
     $('#sch-undo').addEventListener('click', doUndo);
