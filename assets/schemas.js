@@ -96,7 +96,8 @@
   const S = {
     tool: 'select',
     placeKey: null,
-    sel: null,
+    sels: [],              // identifiants des éléments sélectionnés
+    multi: false,          // mode « sélection multiple » (pour l'écran tactile)
     view: { x: 40, y: 40, k: 1 },
     snap: true,
     mat: 'plein',          // matériau des prochains murs
@@ -110,10 +111,19 @@
     redo: [],
   };
 
+  // S.sel = identifiant de l'élément sélectionné quand il y en a exactement un (sinon null) ;
+  // S.sels = sélection complète. Les actions « un seul élément » restent donc inchangées.
+  Object.defineProperty(S, 'sel', {
+    get() { return S.sels.length === 1 ? S.sels[0] : null; },
+    set(v) { S.sels = v ? [v] : []; },
+  });
+
   const schema = () => db.list.find((s) => s.id === db.current) || null;
   const items = () => (schema() ? schema().items : []);
   const snapJSON = () => JSON.stringify(items());
   const findItem = (id) => items().find((i) => i.id === id) || null;
+  const selItems = () => S.sels.map(findItem).filter(Boolean);
+  const pruneSel = () => { S.sels = S.sels.filter((id) => findItem(id)); };
 
   function newSchema(name) {
     const s = { id: uid(), name: name || 'Schéma ' + (db.list.length + 1), items: [], view: null, updated: Date.now() };
@@ -137,7 +147,7 @@
   }
   function setItems(arr) {
     schema().items = arr;
-    if (S.sel && !findItem(S.sel)) S.sel = null;
+    pruneSel();
     save();
     render();
     updateUI();
@@ -292,9 +302,9 @@
     return walls + wallsFill + open + links + syms + texts;
   }
 
-  function selSVG(it) {
+  function selSVG(it, multi) {
     const dash = `fill="none" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"`;
-    const handle = (x, y) => `<circle cx="${x}" cy="${y}" r="${7 / S.view.k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    const handle = (x, y) => multi ? '' : `<circle cx="${x}" cy="${y}" r="${7 / S.view.k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
     if (it.t === 'wall') {
       return `<line x1="${it.x1}" y1="${it.y1}" x2="${it.x2}" y2="${it.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="${(it.th || WALL_TH) + 6}" stroke-linecap="round"/>` +
         handle(it.x1, it.y1) + handle(it.x2, it.y2);
@@ -320,8 +330,12 @@
 
   function overlaySVG() {
     let o = '';
-    const sel = S.sel && findItem(S.sel);
-    if (sel) o += selSVG(sel);
+    const selList = selItems();
+    for (const it of selList) o += selSVG(it, selList.length > 1);
+    if (selList.length > 1) {
+      const bb = contentBBox(selList);
+      if (bb) o += `<rect x="${bb.x - 4}" y="${bb.y - 4}" width="${bb.w + 8}" height="${bb.h + 8}" fill="none" stroke="${SEL}" stroke-width="1" stroke-dasharray="2 4" vector-effect="non-scaling-stroke"/>`;
+    }
     const c = S.cursor;
     const k = S.view.k;
     if (S.tool === 'bg') {
@@ -353,6 +367,10 @@
     if (S.drag && S.drag.mode === 'room' && c) {
       const a = S.drag.a, q = snapPt(c, GRID);
       o += `<rect x="${Math.min(a.x, q.x)}" y="${Math.min(a.y, q.y)}" width="${Math.abs(q.x - a.x)}" height="${Math.abs(q.y - a.y)}" fill="${SEL}" fill-opacity="0.08" stroke="${SEL}" stroke-width="${S.th}" stroke-opacity="0.6" stroke-linejoin="miter"/>`;
+    }
+    if (S.drag && S.drag.mode === 'marquee' && c) {
+      const a = S.drag.a;
+      o += `<rect x="${Math.min(a.x, c.x)}" y="${Math.min(a.y, c.y)}" width="${Math.abs(c.x - a.x)}" height="${Math.abs(c.y - a.y)}" fill="${SEL}" fill-opacity="0.08" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
     }
     if (S.drag && S.drag.mode === 'link' && c) {
       const a = resolveEnd(items(), S.drag.a);
@@ -400,6 +418,7 @@
     return `<image x="${cb.b.x}" y="${cb.b.y}" width="${cb.b.w}" height="${cb.b.h}" opacity="${cb.b.opacity}" preserveAspectRatio="none" href="${cb.data}"/>`;
   }
   function render() {
+    pruneSel();
     applyView();
     renderBg();
     sceneG.innerHTML = sceneSVG(items());
@@ -480,14 +499,33 @@
     viewTimer = setTimeout(() => { const s = schema(); if (s) { s.view = { ...S.view }; save(); } }, 400);
   }
 
+  // Rectangle englobant [x0, y0, x1, y1] d'un élément (null pour une liaison)
+  function itemBounds(it) {
+    if (it.t === 'wall') {
+      const m = (it.th || WALL_TH) / 2 + 3;
+      return [Math.min(it.x1, it.x2) - m, Math.min(it.y1, it.y2) - m, Math.max(it.x1, it.x2) + m, Math.max(it.y1, it.y2) + m];
+    }
+    if (it.t === 'sym') {
+      const [a, b, c, d] = SYM.map[it.key].b;
+      const m = Math.max(Math.abs(a), Math.abs(b), Math.abs(c), Math.abs(d)) * (it.s || 1);
+      return [it.x - m, it.y - m, it.x + m, it.y + m];
+    }
+    if (it.t === 'text') return textBox(it);
+    if (it.t === 'door' || it.t === 'window') {
+      const a = rad(it.rot || 0), ux = Math.cos(a), uy = Math.sin(a);
+      const h = it.t === 'door' ? it.len : (it.th || WALL_TH) / 2 + 4;
+      const pts = [[0, -h], [0, h], [it.len, -h], [it.len, h]].map(([u, v]) => [it.x + ux * u - uy * v, it.y + uy * u + ux * v]);
+      return [Math.min(...pts.map((q) => q[0])), Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1]))];
+    }
+    return null;
+  }
+
   function contentBBox(list) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    const add = (x, y) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
     for (const it of list) {
-      if (it.t === 'wall') { const m = (it.th || WALL_TH) / 2 + 3; add(it.x1 - m, it.y1 - m); add(it.x2 + m, it.y2 + m); }
-      else if (it.t === 'sym') { const [a, b, c, d] = SYM.map[it.key].b; const s = it.s || 1, m = Math.max(Math.abs(a), Math.abs(b), Math.abs(c), Math.abs(d)) * s; add(it.x - m, it.y - m); add(it.x + m, it.y + m); }
-      else if (it.t === 'text') { const [a, b, c, d] = textBox(it); add(a, b); add(c, d); }
-      else if (it.t === 'door' || it.t === 'window') { add(it.x - it.len, it.y - it.len); add(it.x + it.len, it.y + it.len); }
+      const b = itemBounds(it);
+      if (!b) continue;
+      x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]);
     }
     if (x0 === Infinity) return null;
     return { x: x0, y: y0, w: Math.max(x1 - x0, 1), h: Math.max(y1 - y0, 1) };
@@ -519,7 +557,8 @@
 
   /* ---------- Outils ---------- */
   const HINTS = {
-    select: 'Sélection : cliquez un élément pour le déplacer ; faites glisser le fond pour vous déplacer ; molette ou pincement pour zoomer.',
+    select: 'Sélection : cliquez un élément pour le déplacer ; Maj+clic en ajoute ou en retire ; Maj+glisser sur le fond trace un rectangle de sélection ; glisser le fond pour vous déplacer ; molette ou pincement pour zoomer.',
+    multi: 'Sélection multiple : touchez les éléments pour les ajouter ou les retirer ; glissez sur le fond pour tracer un rectangle (tout ce qui est entièrement dedans est sélectionné). Déplacement de la vue : deux doigts, clic droit ou molette.',
     wall: 'Mur : cliquez pour poser le point de départ, puis cliquez à chaque angle. Double-clic ou Échap pour terminer. Matériau : palette ; épaisseur : barre « Murs ».',
     room: 'Pièce : faites glisser d’un angle à l’angle opposé pour créer les 4 murs.',
     door: 'Porte : cliquez sur un mur pour la poser (elle s’aligne sur le mur). Les boutons « Miroir » changent le sens d’ouverture.',
@@ -590,17 +629,34 @@
 
     switch (S.tool) {
       case 'select': {
-        const sel = S.sel && findItem(S.sel);
-        if (sel && sel.t === 'wall') {
-          const h = wallHandleAt(sel, p);
-          if (h) { S.drag = { mode: 'wallEnd', id: sel.id, h, before: snapJSON() }; return; }
+        // Maj / Ctrl / Cmd (ou mode « Sélection multiple ») : on ajoute ou retire des éléments
+        const additive = e.shiftKey || e.ctrlKey || e.metaKey || S.multi;
+        const one = S.sel && findItem(S.sel);
+        if (one && one.t === 'wall') {
+          const h = wallHandleAt(one, p);
+          if (h) { S.drag = { mode: 'wallEnd', id: one.id, h, before: snapJSON() }; return; }
         }
         const hit = hitItem(p);
+        const here = { cx: e.clientX, cy: e.clientY, moved: false };
         if (hit) {
-          S.sel = hit.id;
-          S.drag = { mode: 'move', id: hit.id, p0: p, orig: clone(hit), before: snapJSON() };
+          let click = null;
+          if (additive) {
+            if (S.sels.includes(hit.id)) click = 'toggle';
+            else S.sels = [...S.sels, hit.id];
+          } else if (S.sels.length > 1 && S.sels.includes(hit.id)) click = 'collapse';
+          else S.sels = [hit.id];
+          const ids = S.sels.slice();
+          if (ids.length > 1) {
+            const origs = {};
+            for (const id of ids) origs[id] = clone(findItem(id));
+            S.drag = { mode: 'gmove', ids, primary: hit.id, p0: p, origs, before: snapJSON(), hitId: hit.id, click, ...here };
+          } else {
+            S.drag = { mode: 'move', id: hit.id, p0: p, orig: clone(hit), before: snapJSON(), hitId: hit.id, click, ...here };
+          }
+        } else if (additive) {
+          S.drag = { mode: 'marquee', a: p, add: e.shiftKey || e.ctrlKey || e.metaKey, ...here };
         } else {
-          S.sel = null;
+          S.sels = [];
           S.drag = { mode: 'pan', cx: e.clientX, cy: e.clientY, vx: S.view.x, vy: S.view.y };
         }
         render(); updateUI();
@@ -671,6 +727,7 @@
     S.cursor = p;
     const d = S.drag;
     if (!d) { renderOverlay(); return; }
+    if (d.cx !== undefined && !d.moved && Math.hypot(e.clientX - d.cx, e.clientY - d.cy) > 3) d.moved = true;
 
     if (d.mode === 'pan') {
       S.view.x = d.vx + (e.clientX - d.cx);
@@ -678,7 +735,23 @@
       applyView();
       return;
     }
+    if (d.mode === 'gmove') {
+      if (!d.moved) return;
+      const hasWall = d.ids.some((id) => d.origs[id].t === 'wall');
+      const step = hasWall ? GRID : STEP;
+      const dx = snapOn(p.x - d.p0.x, step), dy = snapOn(p.y - d.p0.y, step);
+      for (const id of d.ids) {
+        const it = findItem(id), o = d.origs[id];
+        if (!it || it.t === 'link') continue;
+        if (it.t === 'wall') { it.x1 = o.x1 + dx; it.y1 = o.y1 + dy; it.x2 = o.x2 + dx; it.y2 = o.y2 + dy; }
+        else { it.x = o.x + dx; it.y = o.y + dy; }
+      }
+      sceneG.innerHTML = sceneSVG(items());
+      renderOverlay();
+      return;
+    }
     if (d.mode === 'move') {
+      if (!d.moved) return;
       const it = findItem(d.id);
       if (!it) return;
       const dx = p.x - d.p0.x, dy = p.y - d.p0.y, o = d.orig;
@@ -739,9 +812,22 @@
 
     if (d.mode === 'pan') { rememberView(); return; }
     if (d.mode === 'bgMove' || d.mode === 'bgScale') { save(); renderOverlay(); return; }
-    if (d.mode === 'move' || d.mode === 'wallEnd') {
+    if (d.mode === 'move' || d.mode === 'gmove' || d.mode === 'wallEnd') {
       const now = snapJSON();
       if (now !== d.before) { pushUndo(d.before); save(); }
+      if (!d.moved && d.click === 'toggle') S.sels = S.sels.filter((id) => id !== d.hitId);
+      else if (!d.moved && d.click === 'collapse') S.sels = [d.hitId];
+      render(); updateUI();
+      return;
+    }
+    if (d.mode === 'marquee') {
+      if (!d.moved) { if (!d.add) S.sels = []; render(); updateUI(); return; }
+      const x0 = Math.min(d.a.x, p.x), x1 = Math.max(d.a.x, p.x), y0 = Math.min(d.a.y, p.y), y1 = Math.max(d.a.y, p.y);
+      const inside = items().filter((it) => {
+        const b = itemBounds(it);
+        return b && b[0] >= x0 && b[1] >= y0 && b[2] <= x1 && b[3] <= y1;
+      }).map((it) => it.id);
+      S.sels = d.add ? [...new Set([...S.sels, ...inside])] : inside;
       render(); updateUI();
       return;
     }
@@ -796,7 +882,7 @@
   function onCancel(e) {
     S.pointers.delete(e.pointerId);
     if (S.pointers.size < 2) S.gesture = null;
-    if (S.drag && (S.drag.mode === 'move' || S.drag.mode === 'wallEnd')) setItems(JSON.parse(S.drag.before));
+    if (S.drag && (S.drag.mode === 'move' || S.drag.mode === 'gmove' || S.drag.mode === 'wallEnd')) setItems(JSON.parse(S.drag.before));
     S.drag = null;
     renderOverlay();
   }
@@ -824,22 +910,29 @@
   const sel = () => (S.sel ? findItem(S.sel) : null);
 
   function rotateSel(dir) {
+    if (S.sels.length > 1) { rotateGroup(dir); return; }
     const it = sel();
     if (!it || !['sym', 'door', 'window'].includes(it.t)) return;
     mutate(() => { it.rot = ((it.rot || 0) + 90 * dir + 360) % 360; });
   }
+
   // Miroir par rapport à l'écran (comme « Retourner » dans un traitement de texte) :
   //   horizontal = gauche <-> droite ; vertical = haut <-> bas.
   // Un miroir inverse aussi le sens de rotation : rot devient -rot. Pour une porte, l'ouverture
   // (dont x,y est le point de départ) est recalée pour rester exactement à la même place.
+  function mirrorInPlace(it, axis) {
+    if (it.t === 'door' && it.flip !== undefined) { it.my = !!(it.my || it.flip); delete it.flip; }
+    it.rot = rnd((((-(it.rot || 0)) % 360) + 360) % 360);
+    if (it.t === 'window') return;          // une fenêtre est symétrique : seule sa rotation change
+    if (axis === 'h') it.mx = !it.mx; else it.my = !it.my;
+  }
   function mirrorSel(axis) {
+    if (S.sels.length > 1) { mirrorGroup(axis); return; }
     const it = sel();
     if (!it || (it.t !== 'sym' && it.t !== 'door')) return;
     mutate(() => {
-      if (it.t === 'door' && it.flip !== undefined) { it.my = !!(it.my || it.flip); delete it.flip; }
       const c = it.t === 'door' ? openingCenter(it) : null;
-      it.rot = rnd((((-(it.rot || 0)) % 360) + 360) % 360);
-      if (axis === 'h') it.mx = !it.mx; else it.my = !it.my;
+      mirrorInPlace(it, axis);
       if (c) {
         const a = rad(it.rot);
         it.x = rnd(c.x - Math.cos(a) * it.len / 2);
@@ -847,20 +940,100 @@
       }
     });
   }
-  function resizeSel(dir) {
-    const it = sel();
-    if (!it) return;
-    if (it.t === 'sym') mutate(() => { it.s = rnd(Math.max(0.4, Math.min(3, (it.s || 1) * (dir > 0 ? 1.15 : 1 / 1.15)))); });
+
+  function resizeItem(it, dir) {
+    if (it.t === 'sym') it.s = rnd(Math.max(0.4, Math.min(3, (it.s || 1) * (dir > 0 ? 1.15 : 1 / 1.15))));
     else if (it.t === 'door' || it.t === 'window') {
-      mutate(() => {
-        const c = openingCenter(it);
-        it.len = Math.max(20, Math.min(200, it.len + 10 * dir));
-        const a = rad(it.rot || 0);
-        it.x = rnd(c.x - Math.cos(a) * it.len / 2);
-        it.y = rnd(c.y - Math.sin(a) * it.len / 2);
-      });
-    } else if (it.t === 'text') mutate(() => { it.size = Math.max(8, Math.min(80, it.size + 2 * dir)); });
+      const c = openingCenter(it);
+      it.len = Math.max(20, Math.min(200, it.len + 10 * dir));
+      const a = rad(it.rot || 0);
+      it.x = rnd(c.x - Math.cos(a) * it.len / 2);
+      it.y = rnd(c.y - Math.sin(a) * it.len / 2);
+    } else if (it.t === 'text') it.size = Math.max(8, Math.min(80, it.size + 2 * dir));
   }
+  function resizeSel(dir) {
+    const list = selItems().filter((i) => ['sym', 'door', 'window', 'text'].includes(i.t));
+    if (!list.length) return;
+    mutate(() => list.forEach((it) => resizeItem(it, dir)));
+  }
+
+  /* ----- Sélection multiple : rotation et miroir du groupe autour de son centre ----- */
+  // Le centre est calculé sur les points d'ancrage (extrémités des murs, centres des objets), puis calé
+  // sur la grille pour que les murs restent alignés. Il est mémorisé tant que la sélection n'a pas
+  // été modifiée par autre chose qu'une rotation ou un miroir : ainsi 4 rotations (ou 2 miroirs)
+  // ramènent exactement le groupe à sa place, même quand le centre tombe entre deux nœuds de grille.
+  let gcMemo = null;
+  function exactCenter(list) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const add = (x, y) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
+    for (const it of list) {
+      if (it.t === 'wall') { add(it.x1, it.y1); add(it.x2, it.y2); }
+      else if (it.t === 'door' || it.t === 'window') { const c = openingCenter(it); add(c.x, c.y); }
+      else add(it.x, it.y);
+    }
+    return x0 === Infinity ? { x: 0, y: 0 } : { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+  }
+  function groupCenter(list) {
+    const e = exactCenter(list);
+    const key = list.map((i) => i.id).sort().join(',');
+    if (gcMemo && gcMemo.key === key && Math.abs(gcMemo.e.x - e.x) < 0.5 && Math.abs(gcMemo.e.y - e.y) < 0.5) return gcMemo.c;
+    const c = { x: snapTo(e.x, GRID), y: snapTo(e.y, GRID) };
+    gcMemo = { key, c, e };
+    return c;
+  }
+  function rememberCenter(list) { if (gcMemo) gcMemo.e = exactCenter(list); }
+  function rotateGroup(dir) {
+    const list = selItems().filter((i) => i.t !== 'link');
+    if (list.length < 2) return;
+    const c = groupCenter(list);
+    const rp = (x, y) => ({ x: rnd(c.x - (y - c.y) * dir), y: rnd(c.y + (x - c.x) * dir) });
+    mutate(() => {
+      for (const it of list) {
+        if (it.t === 'wall') {
+          const a = rp(it.x1, it.y1), b = rp(it.x2, it.y2);
+          it.x1 = a.x; it.y1 = a.y; it.x2 = b.x; it.y2 = b.y;
+        } else if (it.t === 'sym' || it.t === 'text') {
+          const q = rp(it.x, it.y);
+          it.x = q.x; it.y = q.y;
+          if (it.t === 'sym') it.rot = ((it.rot || 0) + 90 * dir + 360) % 360;
+        } else {
+          const cc = openingCenter(it), q = rp(cc.x, cc.y);
+          it.rot = ((it.rot || 0) + 90 * dir + 360) % 360;
+          const a = rad(it.rot);
+          it.x = rnd(q.x - Math.cos(a) * it.len / 2);
+          it.y = rnd(q.y - Math.sin(a) * it.len / 2);
+        }
+      }
+    });
+    rememberCenter(list);
+  }
+  function mirrorGroup(axis) {
+    const list = selItems().filter((i) => i.t !== 'link');
+    if (list.length < 2) return;
+    const c = groupCenter(list);
+    const rx = (x) => rnd(2 * c.x - x), ry = (y) => rnd(2 * c.y - y);
+    mutate(() => {
+      for (const it of list) {
+        if (it.t === 'wall') {
+          if (axis === 'h') { it.x1 = rx(it.x1); it.x2 = rx(it.x2); } else { it.y1 = ry(it.y1); it.y2 = ry(it.y2); }
+        } else if (it.t === 'text') {
+          if (axis === 'h') it.x = rx(it.x); else it.y = ry(it.y);   // le texte reste lisible : seule sa position change
+        } else if (it.t === 'sym') {
+          mirrorInPlace(it, axis);
+          if (axis === 'h') it.x = rx(it.x); else it.y = ry(it.y);
+        } else {
+          const cc = openingCenter(it);
+          const q = axis === 'h' ? { x: rx(cc.x), y: cc.y } : { x: cc.x, y: ry(cc.y) };
+          mirrorInPlace(it, axis);
+          const a = rad(it.rot);
+          it.x = rnd(q.x - Math.cos(a) * it.len / 2);
+          it.y = rnd(q.y - Math.sin(a) * it.len / 2);
+        }
+      }
+    });
+    rememberCenter(list);
+  }
+
   function editText(id) {
     const it = findItem(id || S.sel);
     if (!it || it.t !== 'text') return;
@@ -868,37 +1041,55 @@
     if (t !== null && t.trim()) mutate(() => { it.text = t.trim().slice(0, 80); });
   }
   function duplicateSel() {
-    const it = sel();
-    if (!it || it.t === 'link') return;
-    const c = clone(it);
-    c.id = uid();
-    if (it.t === 'wall') { c.x1 += GRID; c.y1 += GRID; c.x2 += GRID; c.y2 += GRID; }
-    else { c.x += GRID; c.y += GRID; }
-    mutate(() => items().push(c));
-    S.sel = c.id;
-    renderOverlay(); updateUI();
+    const list = selItems().filter((i) => i.t !== 'link');
+    if (!list.length) return;
+    const map = {}, copies = [];
+    for (const it of list) {
+      const c = clone(it);
+      c.id = uid();
+      map[it.id] = c.id;
+      if (it.t === 'wall') { c.x1 += GRID; c.y1 += GRID; c.x2 += GRID; c.y2 += GRID; }
+      else { c.x += GRID; c.y += GRID; }
+      copies.push(c);
+    }
+    // les liaisons entre deux éléments dupliqués sont dupliquées aussi
+    const moved = (e) => ({ ...e, id: map[e.id], x: e.x + GRID, y: e.y + GRID });
+    for (const l of items()) {
+      if (l.t === 'link' && l.a && l.b && l.a.id && l.b.id && map[l.a.id] && map[l.b.id]) {
+        copies.push({ id: uid(), t: 'link', a: moved(l.a), b: moved(l.b) });
+      }
+    }
+    mutate(() => items().push(...copies));
+    S.sels = copies.filter((c) => c.t !== 'link').map((c) => c.id);
+    render(); updateUI();
   }
   function deleteSel() {
-    const it = sel();
-    if (!it) return;
+    const ids = new Set(selItems().map((i) => i.id));
+    if (!ids.size) return;
     mutate(() => {
-      const id = it.id;
-      schema().items = items().filter((i) => i.id !== id && !(i.t === 'link' && ((i.a && i.a.id === id) || (i.b && i.b.id === id))));
+      schema().items = items().filter((i) => !ids.has(i.id) && !(i.t === 'link' && ((i.a && ids.has(i.a.id)) || (i.b && ids.has(i.b.id)))));
     });
-    S.sel = null;
+    S.sels = [];
     render(); updateUI();
   }
   function nudgeSel(dx, dy) {
-    const it = sel();
-    if (!it || it.t === 'link') return;
+    const list = selItems().filter((i) => i.t !== 'link');
+    if (!list.length) return;
     mutate(() => {
-      if (it.t === 'wall') { it.x1 += dx; it.x2 += dx; it.y1 += dy; it.y2 += dy; }
-      else { it.x += dx; it.y += dy; }
+      for (const it of list) {
+        if (it.t === 'wall') { it.x1 += dx; it.x2 += dx; it.y1 += dy; it.y2 += dy; }
+        else { it.x += dx; it.y += dy; }
+      }
     });
+  }
+  function selectAll() {
+    S.tool = 'select';
+    S.sels = items().filter((i) => i.t !== 'link').map((i) => i.id);
+    render(); updateUI();
   }
 
   /* ---------- Murs : matériau et épaisseur ---------- */
-  const selWall = () => { const it = sel(); return it && it.t === 'wall' ? it : null; };
+  const selWalls = () => selItems().filter((i) => i.t === 'wall');
   const clampTh = (v) => Math.max(2, Math.min(60, v));
 
   // Aligne l'épaisseur des portes / fenêtres sur celle du mur qui les porte
@@ -914,22 +1105,22 @@
   }
   function setMaterial(key) {
     if (!MAT.map[key]) return;
-    const w = selWall();
+    const ws = selWalls();
     S.mat = key;
-    if (w) mutate(() => { w.mat = key; });
+    if (ws.length) mutate(() => { for (const w of ws) w.mat = key; });
     else updateUI();
   }
   function changeThickness(dir) {
-    const w = selWall();
-    const nt = clampTh((w ? (w.th || WALL_TH) : S.th) + 2 * dir);
+    const ws = selWalls();
+    const nt = clampTh((ws.length ? (ws[0].th || WALL_TH) : S.th) + 2 * dir);
     S.th = nt;
-    if (w) mutate(() => { w.th = nt; syncOpenings(); });
+    if (ws.length) mutate(() => { for (const w of ws) w.th = nt; syncOpenings(); });
     else updateUI();
   }
   function applyAllWalls() {
     const walls = items().filter((i) => i.t === 'wall');
     if (!walls.length) return;
-    const src = selWall();
+    const src = selWalls()[0];
     const mat = src ? (src.mat || 'plein') : S.mat;
     const th = src ? (src.th || WALL_TH) : S.th;
     mutate(() => { for (const w of walls) { w.mat = mat; w.th = th; } syncOpenings(); });
@@ -963,24 +1154,33 @@
   function updateUI() {
     root.querySelectorAll('[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === S.tool)));
     root.querySelectorAll('.sch-sym').forEach((b) => b.classList.toggle('is-active', S.tool === 'place' && b.dataset.sym === S.placeKey));
-    const it = sel();
-    const t = it ? it.t : null;
+    const list = selItems();
+    const movable = list.filter((i) => i.t !== 'link');
+    const t = list.length === 1 ? list[0].t : null;
     const en = (id, ok) => { const b = $(id); if (b) b.disabled = !ok; };
-    en('#sch-rot-l', ['sym', 'door', 'window'].includes(t));
-    en('#sch-rot-r', ['sym', 'door', 'window'].includes(t));
-    en('#sch-mirror-h', t === 'sym' || t === 'door');
-    en('#sch-mirror-v', t === 'sym' || t === 'door');
-    en('#sch-size-m', ['sym', 'door', 'window', 'text'].includes(t));
-    en('#sch-size-p', ['sym', 'door', 'window', 'text'].includes(t));
-    en('#sch-dup', !!it && t !== 'link');
+    const canRot = movable.length > 1 || ['sym', 'door', 'window'].includes(t);
+    const canMirror = movable.length > 1 || t === 'sym' || t === 'door';
+    const canSize = list.some((i) => ['sym', 'door', 'window', 'text'].includes(i.t));
+    en('#sch-rot-l', canRot);
+    en('#sch-rot-r', canRot);
+    en('#sch-mirror-h', canMirror);
+    en('#sch-mirror-v', canMirror);
+    en('#sch-size-m', canSize);
+    en('#sch-size-p', canSize);
+    en('#sch-dup', movable.length > 0);
     en('#sch-edit', t === 'text');
-    en('#sch-delete', !!it);
+    en('#sch-delete', list.length > 0);
+    en('#sch-selectall', items().some((i) => i.t !== 'link'));
+    $('#sch-selcount').textContent = list.length > 1 ? list.length + ' éléments sélectionnés' : '';
+    $('#sch-multi').setAttribute('aria-pressed', String(S.multi && S.tool === 'select'));
     en('#sch-undo', S.undo.length > 0);
     en('#sch-redo', S.redo.length > 0);
-    const wsel = selWall();
-    const curMat = wsel ? (wsel.mat || 'plein') : S.mat;
+    const ws = selWalls();
+    const sameMat = ws.length && ws.every((w) => (w.mat || 'plein') === (ws[0].mat || 'plein'));
+    const sameTh = ws.length && ws.every((w) => (w.th || WALL_TH) === (ws[0].th || WALL_TH));
+    const curMat = ws.length ? (sameMat ? (ws[0].mat || 'plein') : null) : S.mat;
     root.querySelectorAll('.sch-mat').forEach((b) => b.classList.toggle('is-active', b.dataset.mat === curMat));
-    $('#sch-th-val').textContent = String(wsel ? (wsel.th || WALL_TH) : S.th);
+    $('#sch-th-val').textContent = ws.length ? (sameTh ? String(ws[0].th || WALL_TH) : '—') : String(S.th);
     en('#sch-mat-all', items().some((i) => i.t === 'wall'));
     const sch = schema();
     const hasBg = !!(sch && sch.bg && bgGet(sch.id));
@@ -990,7 +1190,7 @@
     en('#sch-bg-remove', hasBg);
     $('#sch-bg-toggle').textContent = hasBg && sch.bg.visible === false ? 'Afficher' : 'Masquer';
     if (hasBg) $('#sch-bg-op').value = Math.round((sch.bg.opacity || 0.5) * 100);
-    $('#sch-hint').textContent = HINTS[S.tool] || '';
+    $('#sch-hint').textContent = (S.tool === 'select' && S.multi) ? HINTS.multi : (HINTS[S.tool] || '');
     $('#sch-snap').checked = S.snap;
     svg.style.cursor = S.tool === 'select' ? 'default' : 'crosshair';
   }
@@ -1182,6 +1382,11 @@
     $('#sch-mat-all').addEventListener('click', applyAllWalls);
     root.querySelectorAll('[data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
     $('#sch-snap').addEventListener('change', (e) => { S.snap = e.target.checked; });
+    $('#sch-multi').addEventListener('click', () => {
+      if (S.tool !== 'select') { S.multi = true; setTool('select'); }
+      else { S.multi = !S.multi; updateUI(); }
+    });
+    $('#sch-selectall').addEventListener('click', selectAll);
     $('#sch-undo').addEventListener('click', doUndo);
     $('#sch-redo').addEventListener('click', doRedo);
     $('#sch-zoom-in').addEventListener('click', () => zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, 1.25));
@@ -1270,14 +1475,20 @@
     if (mod && key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && key.toLowerCase() === 'y') { e.preventDefault(); doRedo(); return; }
     if (mod && key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel(); return; }
-    if (key === 'Delete' || key === 'Backspace') { if (sel()) { e.preventDefault(); deleteSel(); } return; }
-    if (key === 'Escape') { S.draft = null; S.drag = null; setTool('select'); return; }
+    if (mod && key.toLowerCase() === 'a') { e.preventDefault(); selectAll(); return; }
+    if (key === 'Delete' || key === 'Backspace') { if (S.sels.length) { e.preventDefault(); deleteSel(); } return; }
+    if (key === 'Escape') {
+      S.draft = null; S.drag = null;
+      if (S.tool === 'select' && S.sels.length) { S.sels = []; render(); updateUI(); return; }
+      setTool('select');
+      return;
+    }
     if (key === 'r' || key === 'R') { rotateSel(e.shiftKey ? -1 : 1); return; }
     const step = e.shiftKey ? GRID : STEP;
-    if (key === 'ArrowLeft') { if (sel()) { e.preventDefault(); nudgeSel(-step, 0); } }
-    else if (key === 'ArrowRight') { if (sel()) { e.preventDefault(); nudgeSel(step, 0); } }
-    else if (key === 'ArrowUp') { if (sel()) { e.preventDefault(); nudgeSel(0, -step); } }
-    else if (key === 'ArrowDown') { if (sel()) { e.preventDefault(); nudgeSel(0, step); } }
+    if (key === 'ArrowLeft') { if (S.sels.length) { e.preventDefault(); nudgeSel(-step, 0); } }
+    else if (key === 'ArrowRight') { if (S.sels.length) { e.preventDefault(); nudgeSel(step, 0); } }
+    else if (key === 'ArrowUp') { if (S.sels.length) { e.preventDefault(); nudgeSel(0, -step); } }
+    else if (key === 'ArrowDown') { if (S.sels.length) { e.preventDefault(); nudgeSel(0, step); } }
   }
 
   /* ---------- Entrée publique ---------- */

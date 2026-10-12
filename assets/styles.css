@@ -805,3 +805,6 @@ dialog h2 {
 .sch-mat svg { background: #fff; border-radius: 4px; }
 .sch-mat:hover { border-color: var(--accent); color: var(--text); }
 .sch-mat.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--text); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* ---------- Sélection multiple ---------- */
+.sch-selcount { font-size: 0.8125rem; font-weight: 600; color: var(--accent); min-width: 8.5em; }

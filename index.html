@@ -541,6 +541,7 @@ M834 80h400000v40h-400000z"></path></svg></span></span></span><span class="vlist
 
     <div class="sch-tools" id="sch-tools" role="toolbar" aria-label="Outils de dessin">
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="select" aria-pressed="true">Sélection</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" id="sch-multi" aria-pressed="false" title="Sélection multiple : un clic ajoute ou retire un élément ; faire glisser sur le fond trace un rectangle de sélection">Sélection multiple</button>
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="wall" aria-pressed="false">Mur</button>
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="room" aria-pressed="false">Pièce</button>
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="door" aria-pressed="false">Porte</button>
@@ -558,7 +559,9 @@ M834 80h400000v40h-400000z"></path></svg></span></span></span><span class="vlist
       <button type="button" class="btn btn-ghost btn-sm" id="sch-fit">Ajuster</button>
     </div>
 
-    <div class="sch-actions" id="sch-actions" role="toolbar" aria-label="Actions sur l'élément sélectionné">
+    <div class="sch-actions" id="sch-actions" role="toolbar" aria-label="Actions sur la sélection">
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-selectall" title="Tout sélectionner (Ctrl+A)">Tout sélectionner</button>
+      <span class="sch-selcount" id="sch-selcount" aria-live="polite"></span>
       <button type="button" class="btn btn-ghost btn-sm" id="sch-rot-l" title="Pivoter à gauche (Maj+R)">⟲ Pivoter</button>
       <button type="button" class="btn btn-ghost btn-sm" id="sch-rot-r" title="Pivoter à droite (R)">⟳ Pivoter</button>
       <button type="button" class="btn btn-ghost btn-sm" id="sch-mirror-h" title="Miroir horizontal : inverse la gauche et la droite (symboles et portes)">↔ Miroir horizontal</button>
