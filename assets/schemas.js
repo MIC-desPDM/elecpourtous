@@ -46,7 +46,11 @@
       const raw = store && store.getItem(KEY);
       if (raw) {
         const d = JSON.parse(raw);
-        if (d && Array.isArray(d.list)) db = { list: d.list.filter((s) => s && Array.isArray(s.items)), current: d.current };
+        if (d && Array.isArray(d.list)) {
+          db = { list: d.list.filter((s) => s && Array.isArray(s.items)), current: d.current };
+          // anciennes portes : « flip » (sens d'ouverture) devient « my » (miroir vertical)
+          for (const s of db.list) for (const it of s.items) if (it && it.t === 'door' && it.flip !== undefined) { if (it.flip) it.my = true; delete it.flip; }
+        }
       }
     } catch (e) { /* données illisibles : on repart de zéro */ }
   }
@@ -190,7 +194,11 @@
       if (r.d <= 16 && (!best || r.d < best.d)) best = { d: r.d, qx: r.qx, qy: r.qy, w };
     }
     if (best) {
-      it.rot = rnd((Math.atan2(best.w.y2 - best.w.y1, best.w.x2 - best.w.x1) * 180) / Math.PI);
+      const wa = (Math.atan2(best.w.y2 - best.w.y1, best.w.x2 - best.w.x1) * 180) / Math.PI;
+      const gap = (a, b) => Math.abs((((a - b) % 360) + 540) % 360 - 180);
+      const cur = it.rot || 0;
+      const pick = gap(wa, cur) <= gap(wa + 180, cur) ? wa : wa + 180;
+      it.rot = rnd(((pick % 360) + 360) % 360);
       c = { x: best.qx, y: best.qy };
       it.th = best.w.th || WALL_TH;
     } else {
@@ -238,7 +246,8 @@
     const L = o.len, th = o.th || WALL_TH, h = th / 2;
     let g = `<rect x="0" y="${-(h + 2)}" width="${L}" height="${th + 4}" fill="#fff"/>`;
     if (o.t === 'door') {
-      g += `<g${o.flip ? ' transform="scale(1 -1)"' : ''}>` +
+      const tf = `translate(${L / 2} 0) scale(${o.mx ? -1 : 1} ${(o.my || o.flip) ? -1 : 1}) translate(${-L / 2} 0)`;
+      g += `<g transform="${tf}">` +
         `<line x1="0" y1="0" x2="0" y2="${-L}" stroke="${INK}" stroke-width="2.4" stroke-linecap="round"/>` +
         `<path d="M0 ${-L} A${L} ${L} 0 0 1 ${L} 0" fill="none" stroke="${INK}" stroke-width="1.2" stroke-dasharray="4 3"/></g>`;
     } else {
@@ -257,7 +266,8 @@
   }
 
   function symSVG(s) {
-    return `<g transform="translate(${s.x} ${s.y}) rotate(${s.rot || 0}) scale(${s.s || 1})">${SYM.inner(s.key, s.rot || 0)}</g>`;
+    const k = s.s || 1, sx = s.mx ? -1 : 1, sy = s.my ? -1 : 1;
+    return `<g transform="translate(${s.x} ${s.y}) rotate(${s.rot || 0}) scale(${k * sx} ${k * sy})">${SYM.inner(s.key, s.rot || 0, sx, sy)}</g>`;
   }
 
   function textSVG(t) {
@@ -299,11 +309,11 @@
     }
     if (it.t === 'sym') {
       const [x0, y0, x1, y1] = SYM.map[it.key].b;
-      return `<g transform="translate(${it.x} ${it.y}) rotate(${it.rot || 0}) scale(${it.s || 1})"><rect x="${x0 - 2}" y="${y0 - 2}" width="${x1 - x0 + 4}" height="${y1 - y0 + 4}" ${dash}/></g>`;
+      return `<g transform="translate(${it.x} ${it.y}) rotate(${it.rot || 0}) scale(${(it.s || 1) * (it.mx ? -1 : 1)} ${(it.s || 1) * (it.my ? -1 : 1)})"><rect x="${x0 - 2}" y="${y0 - 2}" width="${x1 - x0 + 4}" height="${y1 - y0 + 4}" ${dash}/></g>`;
     }
     // porte / fenêtre
     const hh = (it.th || WALL_TH) / 2 + 4;
-    const top = it.t === 'door' ? (it.flip ? -hh : -(it.len + 3)) : -hh;
+    const top = it.t === 'door' ? ((it.my || it.flip) ? -hh : -(it.len + 3)) : -hh;
     const hgt = it.t === 'door' ? it.len + hh + 3 : hh * 2;
     return `<g transform="translate(${it.x} ${it.y}) rotate(${it.rot || 0})"><rect x="-3" y="${top}" width="${it.len + 6}" height="${hgt}" ${dash}/></g>`;
   }
@@ -405,7 +415,8 @@
       const l = toLocal(it, p);
       const [x0, y0, x1, y1] = SYM.map[it.key].b;
       const s = it.s || 1, tol = 4;
-      if (l.x / s >= x0 - tol && l.x / s <= x1 + tol && l.y / s >= y0 - tol && l.y / s <= y1 + tol) return it;
+      const lx = l.x / (s * (it.mx ? -1 : 1)), ly = l.y / (s * (it.my ? -1 : 1));
+      if (lx >= x0 - tol && lx <= x1 + tol && ly >= y0 - tol && ly <= y1 + tol) return it;
     }
     return null;
   }
@@ -511,7 +522,7 @@
     select: 'Sélection : cliquez un élément pour le déplacer ; faites glisser le fond pour vous déplacer ; molette ou pincement pour zoomer.',
     wall: 'Mur : cliquez pour poser le point de départ, puis cliquez à chaque angle. Double-clic ou Échap pour terminer. Matériau : palette ; épaisseur : barre « Murs ».',
     room: 'Pièce : faites glisser d’un angle à l’angle opposé pour créer les 4 murs.',
-    door: 'Porte : cliquez sur un mur pour la poser (elle s’aligne sur le mur). « Miroir » change le sens d’ouverture.',
+    door: 'Porte : cliquez sur un mur pour la poser (elle s’aligne sur le mur). Les boutons « Miroir » changent le sens d’ouverture.',
     window: 'Fenêtre : cliquez sur un mur pour la poser.',
     text: 'Texte : cliquez à l’endroit voulu (nom de pièce, repère…).',
     link: 'Liaison : faites glisser d’un symbole à un autre (commande vers éclairage, par exemple).',
@@ -632,7 +643,6 @@
       case 'door':
       case 'window': {
         const it = { id: uid(), t: S.tool, x: 0, y: 0, rot: 0, len: S.tool === 'door' ? 40 : 60 };
-        if (S.tool === 'door') it.flip = false;
         placeOpening(it, p);
         mutate(() => items().push(it));
         S.sel = it.id;
@@ -818,10 +828,24 @@
     if (!it || !['sym', 'door', 'window'].includes(it.t)) return;
     mutate(() => { it.rot = ((it.rot || 0) + 90 * dir + 360) % 360; });
   }
-  function flipSel() {
+  // Miroir par rapport à l'écran (comme « Retourner » dans un traitement de texte) :
+  //   horizontal = gauche <-> droite ; vertical = haut <-> bas.
+  // Un miroir inverse aussi le sens de rotation : rot devient -rot. Pour une porte, l'ouverture
+  // (dont x,y est le point de départ) est recalée pour rester exactement à la même place.
+  function mirrorSel(axis) {
     const it = sel();
-    if (!it || it.t !== 'door') return;
-    mutate(() => { it.flip = !it.flip; });
+    if (!it || (it.t !== 'sym' && it.t !== 'door')) return;
+    mutate(() => {
+      if (it.t === 'door' && it.flip !== undefined) { it.my = !!(it.my || it.flip); delete it.flip; }
+      const c = it.t === 'door' ? openingCenter(it) : null;
+      it.rot = rnd((((-(it.rot || 0)) % 360) + 360) % 360);
+      if (axis === 'h') it.mx = !it.mx; else it.my = !it.my;
+      if (c) {
+        const a = rad(it.rot);
+        it.x = rnd(c.x - Math.cos(a) * it.len / 2);
+        it.y = rnd(c.y - Math.sin(a) * it.len / 2);
+      }
+    });
   }
   function resizeSel(dir) {
     const it = sel();
@@ -944,7 +968,8 @@
     const en = (id, ok) => { const b = $(id); if (b) b.disabled = !ok; };
     en('#sch-rot-l', ['sym', 'door', 'window'].includes(t));
     en('#sch-rot-r', ['sym', 'door', 'window'].includes(t));
-    en('#sch-flip', t === 'door');
+    en('#sch-mirror-h', t === 'sym' || t === 'door');
+    en('#sch-mirror-v', t === 'sym' || t === 'door');
     en('#sch-size-m', ['sym', 'door', 'window', 'text'].includes(t));
     en('#sch-size-p', ['sym', 'door', 'window', 'text'].includes(t));
     en('#sch-dup', !!it && t !== 'link');
@@ -1099,10 +1124,10 @@
           ...(num(it.th) ? { th: clampTh(it.th) } : {}) };
       case 'door': case 'window':
         if (![it.x, it.y, it.len].every(num)) return null;
-        return { id, t: it.t, x: it.x, y: it.y, rot: num(it.rot) ? it.rot : 0, len: Math.max(20, Math.min(200, it.len)), ...(num(it.th) ? { th: clampTh(it.th) } : {}), ...(it.t === 'door' ? { flip: !!it.flip } : {}) };
+        return { id, t: it.t, x: it.x, y: it.y, rot: num(it.rot) ? it.rot : 0, len: Math.max(20, Math.min(200, it.len)), ...(num(it.th) ? { th: clampTh(it.th) } : {}), ...(it.t === 'door' ? { ...(it.mx ? { mx: true } : {}), ...(it.my || it.flip ? { my: true } : {}) } : {}) };
       case 'sym':
         if (!SYM.map[it.key] || ![it.x, it.y].every(num)) return null;
-        return { id, t: 'sym', key: it.key, x: it.x, y: it.y, rot: num(it.rot) ? it.rot : 0, s: num(it.s) ? Math.max(0.4, Math.min(3, it.s)) : 1 };
+        return { id, t: 'sym', key: it.key, x: it.x, y: it.y, rot: num(it.rot) ? it.rot : 0, s: num(it.s) ? Math.max(0.4, Math.min(3, it.s)) : 1, ...(it.mx ? { mx: true } : {}), ...(it.my ? { my: true } : {}) };
       case 'text':
         if (typeof it.text !== 'string' || ![it.x, it.y].every(num)) return null;
         return { id, t: 'text', x: it.x, y: it.y, text: it.text.slice(0, 80), size: num(it.size) ? Math.max(8, Math.min(80, it.size)) : 16 };
@@ -1164,7 +1189,8 @@
     $('#sch-fit').addEventListener('click', fitView);
     $('#sch-rot-l').addEventListener('click', () => rotateSel(-1));
     $('#sch-rot-r').addEventListener('click', () => rotateSel(1));
-    $('#sch-flip').addEventListener('click', flipSel);
+    $('#sch-mirror-h').addEventListener('click', () => mirrorSel('h'));
+    $('#sch-mirror-v').addEventListener('click', () => mirrorSel('v'));
     $('#sch-size-m').addEventListener('click', () => resizeSel(-1));
     $('#sch-size-p').addEventListener('click', () => resizeSel(1));
     $('#sch-dup').addEventListener('click', duplicateSel);

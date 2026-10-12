@@ -17,10 +17,18 @@
   const dots3 = (cx, cy, k) =>
     dot(cx, cy - 5.5 * k, 2.4 * k) + dot(cx - 5.2 * k, cy + 3.8 * k, 2.4 * k) + dot(cx + 5.2 * k, cy + 3.8 * k, 2.4 * k);
 
-  // Texte toujours lisible : on annule la rotation du symbole
+  // Texte toujours lisible : on annule la rotation ET le miroir du symbole (c.rot, c.sx, c.sy).
+  // Pour les étiquettes « extérieures » (anchor start/end), le texte part du côté opposé au symbole.
   function label(c, t, x, y, size, anchor, bold) {
-    return `<g transform="rotate(${-(c.rot || 0)} ${x} ${y})"><text x="${x}" y="${y + size * 0.36}" font-size="${size}" ` +
-      `text-anchor="${anchor || 'middle'}" font-family="Arial, Helvetica, sans-serif" font-weight="${bold ? 700 : 400}" ` +
+    const rot = c.rot || 0, sx = c.sx || 1, sy = c.sy || 1;
+    let a = anchor || 'middle';
+    if (a === 'start' || a === 'end') {
+      const r = (rot * Math.PI) / 180;
+      const wx = x * sx * Math.cos(r) - y * sy * Math.sin(r);   // position réelle de l'étiquette
+      a = wx > 2 ? 'start' : wx < -2 ? 'end' : 'middle';
+    }
+    return `<g transform="translate(${x} ${y}) scale(${sx} ${sy}) rotate(${-rot}) translate(${-x} ${-y})"><text x="${x}" y="${y + size * 0.36}" font-size="${size}" ` +
+      `text-anchor="${a}" font-family="Arial, Helvetica, sans-serif" font-weight="${bold ? 700 : 400}" ` +
       `fill="currentColor" stroke="none">${esc(t)}</text></g>`;
   }
 
@@ -162,10 +170,10 @@
     groups,
     map,
     // Contenu SVG d'un symbole (sans translation) ; rot sert à garder les textes droits
-    inner(key, rot) {
+    inner(key, rot, sx, sy) {
       const d = map[key];
       if (!d) return '';
-      return `<g style="color:${INK}" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d.draw({ rot: rot || 0 })}</g>`;
+      return `<g style="color:${INK}" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d.draw({ rot: rot || 0, sx: sx || 1, sy: sy || 1 })}</g>`;
     },
   };
 })();
