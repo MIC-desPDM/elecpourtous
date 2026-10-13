@@ -327,7 +327,7 @@
 
   function selSVG(it, multi) {
     const dash = `fill="none" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"`;
-    const handle = (x, y) => multi ? '' : `<circle cx="${x}" cy="${y}" r="${7 / S.view.k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    const handle = (x, y) => (multi || it.locked) ? '' : `<circle cx="${x}" cy="${y}" r="${7 / S.view.k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
     if (it.t === 'wall') {
       return `<line x1="${it.x1}" y1="${it.y1}" x2="${it.x2}" y2="${it.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="${(it.th || WALL_TH) + 6}" stroke-linecap="round"/>` +
         handle(it.x1, it.y1) + handle(it.x2, it.y2);
@@ -355,6 +355,29 @@
     return `<g transform="translate(${it.x} ${it.y}) rotate(${it.rot || 0})"><rect x="-3" y="${top}" width="${it.len + 6}" height="${hgt}" ${dash}/></g>`;
   }
 
+  const LOCK_RED = '#d62828';
+  function lockPos(it) {
+    if (it.t === 'wall') return { x: (it.x1 + it.x2) / 2, y: (it.y1 + it.y2) / 2 };
+    if (it.t === 'link') {
+      const a = resolveEnd(items(), it.a), b = resolveEnd(items(), it.b);
+      return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    }
+    if (it.t === 'floor') {
+      const n = it.pts.length;
+      return { x: it.pts.reduce((s, q) => s + q[0], 0) / n, y: it.pts.reduce((s, q) => s + q[1], 0) / n };
+    }
+    const b = itemBounds(it);
+    return { x: b[2], y: b[1] };
+  }
+  function lockSVG(it) {
+    const p = lockPos(it);
+    return `<g class="sch-lockmark" transform="translate(${rnd(p.x)} ${rnd(p.y)}) scale(${1 / S.view.k})">` +
+      `<circle r="10" fill="#fff" fill-opacity="0.92" stroke="${LOCK_RED}" stroke-width="1.2"/>` +
+      `<path d="M-3.6 -0.5 V-3.4 a3.6 3.6 0 0 1 7.2 0 V-0.5" fill="none" stroke="${LOCK_RED}" stroke-width="1.9" stroke-linecap="round"/>` +
+      `<rect x="-5.4" y="-0.8" width="10.8" height="8" rx="1.6" fill="${LOCK_RED}"/>` +
+      `<circle cx="0" cy="3.1" r="1.25" fill="#fff"/></g>`;
+  }
+
   function overlaySVG() {
     let o = '';
     const selList = selItems();
@@ -365,6 +388,7 @@
     }
     const c = S.cursor;
     const k = S.view.k;
+    for (const it of items()) if (it.locked) o += lockSVG(it);
     if (S.tool === 'bg') {
       const cb = currentBg();
       if (cb) {
@@ -687,16 +711,16 @@
         // Maj / Ctrl / Cmd (ou mode « Sélection multiple ») : on ajoute ou retire des éléments
         const additive = e.shiftKey || e.ctrlKey || e.metaKey || S.multi;
         const one = S.sel && findItem(S.sel);
-        if (one && one.t === 'wall') {
+        if (one && one.t === 'wall' && !one.locked) {
           const h = wallHandleAt(one, p);
           if (h) { S.drag = { mode: 'wallEnd', id: one.id, h, before: snapJSON() }; return; }
         }
-        if (one && one.t === 'floor') {
+        if (one && one.t === 'floor' && !one.locked) {
           const vi = floorHandleAt(one, p);
           if (vi >= 0) { S.drag = { mode: 'floorVertex', id: one.id, i: vi, before: snapJSON() }; return; }
         }
         const hit = hitItem(p);
-        const here = { cx: e.clientX, cy: e.clientY, moved: false };
+        const here = { cx: e.clientX, cy: e.clientY, moved: false, vx: S.view.x, vy: S.view.y };
         if (hit) {
           let click = null;
           if (additive) {
@@ -708,7 +732,7 @@
           if (ids.length > 1) {
             const origs = {};
             for (const id of ids) origs[id] = clone(findItem(id));
-            S.drag = { mode: 'gmove', ids, primary: hit.id, p0: p, origs, before: snapJSON(), hitId: hit.id, click, ...here };
+            S.drag = { mode: 'gmove', ids, primary: hit.id, p0: p, origs, before: snapJSON(), hitId: hit.id, click, allLocked: ids.every((id) => findItem(id).locked), ...here };
           } else {
             S.drag = { mode: 'move', id: hit.id, p0: p, orig: clone(hit), before: snapJSON(), hitId: hit.id, click, ...here };
           }
@@ -803,12 +827,16 @@
     }
     if (d.mode === 'gmove') {
       if (!d.moved) return;
+      if (d.allLocked) {                     // tout est figé : glisser déplace la vue
+        S.view.x = d.vx + (e.clientX - d.cx); S.view.y = d.vy + (e.clientY - d.cy);
+        d.panned = true; applyView(); return;
+      }
       const hasWall = d.ids.some((id) => d.origs[id].t === 'wall' || d.origs[id].t === 'floor');
       const step = hasWall ? GRID : STEP;
       const dx = snapOn(p.x - d.p0.x, step), dy = snapOn(p.y - d.p0.y, step);
       for (const id of d.ids) {
         const it = findItem(id), o = d.origs[id];
-        if (!it || it.t === 'link') continue;
+        if (!it || it.t === 'link' || it.locked) continue;
         if (it.t === 'wall') { it.x1 = o.x1 + dx; it.y1 = o.y1 + dy; it.x2 = o.x2 + dx; it.y2 = o.y2 + dy; }
         else if (it.t === 'floor') it.pts = o.pts.map(([x, y]) => [x + dx, y + dy]);
         else { it.x = o.x + dx; it.y = o.y + dy; }
@@ -821,6 +849,10 @@
       if (!d.moved) return;
       const it = findItem(d.id);
       if (!it) return;
+      if (it.locked) {                       // élément figé : glisser déplace la vue
+        S.view.x = d.vx + (e.clientX - d.cx); S.view.y = d.vy + (e.clientY - d.cy);
+        d.panned = true; applyView(); return;
+      }
       const dx = p.x - d.p0.x, dy = p.y - d.p0.y, o = d.orig;
       if (it.t === 'wall') {
         const ex = snapOn(o.x1 + dx, GRID) - o.x1, ey = snapOn(o.y1 + dy, GRID) - o.y1;
@@ -892,6 +924,7 @@
     if (d.mode === 'pan') { rememberView(); return; }
     if (d.mode === 'bgMove' || d.mode === 'bgScale') { save(); renderOverlay(); return; }
     if (d.mode === 'move' || d.mode === 'gmove' || d.mode === 'wallEnd' || d.mode === 'floorVertex') {
+      if (d.panned) rememberView();
       const now = snapJSON();
       if (now !== d.before) { pushUndo(d.before); save(); }
       if (!d.moved && d.click === 'toggle') S.sels = S.sels.filter((id) => id !== d.hitId);
@@ -1009,7 +1042,7 @@
     const one = sel();
     if (S.sels.length > 1 || (one && one.t === 'floor')) { rotateGroup(dir); return; }
     const it = sel();
-    if (!it || !['sym', 'door', 'window'].includes(it.t)) return;
+    if (!it || it.locked || !['sym', 'door', 'window'].includes(it.t)) return;
     mutate(() => { it.rot = ((it.rot || 0) + 90 * dir + 360) % 360; });
   }
 
@@ -1027,7 +1060,7 @@
     const one = sel();
     if (S.sels.length > 1 || (one && one.t === 'floor')) { mirrorGroup(axis); return; }
     const it = sel();
-    if (!it || (it.t !== 'sym' && it.t !== 'door')) return;
+    if (!it || it.locked || (it.t !== 'sym' && it.t !== 'door')) return;
     mutate(() => {
       const c = it.t === 'door' ? openingCenter(it) : null;
       mirrorInPlace(it, axis);
@@ -1050,7 +1083,7 @@
     } else if (it.t === 'text') it.size = Math.max(8, Math.min(80, it.size + 2 * dir));
   }
   function resizeSel(dir) {
-    const list = selItems().filter((i) => ['sym', 'door', 'window', 'text'].includes(i.t));
+    const list = selItems().filter((i) => !i.locked && ['sym', 'door', 'window', 'text'].includes(i.t));
     if (!list.length) return;
     mutate(() => list.forEach((it) => resizeItem(it, dir)));
   }
@@ -1082,7 +1115,7 @@
   }
   function rememberCenter(list) { if (gcMemo) gcMemo.e = exactCenter(list); }
   function rotateGroup(dir) {
-    const list = selItems().filter((i) => i.t !== 'link');
+    const list = selItems().filter((i) => i.t !== 'link' && !i.locked);
     if (list.length < 1) return;
     const c = groupCenter(list);
     const rp = (x, y) => ({ x: rnd(c.x - (y - c.y) * dir), y: rnd(c.y + (x - c.x) * dir) });
@@ -1109,7 +1142,7 @@
     rememberCenter(list);
   }
   function mirrorGroup(axis) {
-    const list = selItems().filter((i) => i.t !== 'link');
+    const list = selItems().filter((i) => i.t !== 'link' && !i.locked);
     if (list.length < 1) return;
     const c = groupCenter(list);
     const rx = (x) => rnd(2 * c.x - x), ry = (y) => rnd(2 * c.y - y);
@@ -1139,7 +1172,7 @@
 
   function editText(id) {
     const it = findItem(id || S.sel);
-    if (!it || it.t !== 'text') return;
+    if (!it || it.locked || it.t !== 'text') return;
     const t = window.prompt('Texte à afficher :', it.text);
     if (t !== null && t.trim()) mutate(() => { it.text = t.trim().slice(0, 80); });
   }
@@ -1150,6 +1183,7 @@
     for (const it of list) {
       const c = clone(it);
       c.id = uid();
+      delete c.locked;                      // la copie d'un élément figé n'est pas figée
       map[it.id] = c.id;
       if (it.t === 'wall') { c.x1 += GRID; c.y1 += GRID; c.x2 += GRID; c.y2 += GRID; }
       else if (it.t === 'floor') c.pts = c.pts.map(([x, y]) => [x + GRID, y + GRID]);
@@ -1168,16 +1202,16 @@
     render(); updateUI();
   }
   function deleteSel() {
-    const ids = new Set(selItems().map((i) => i.id));
+    const ids = new Set(selItems().filter((i) => !i.locked).map((i) => i.id));
     if (!ids.size) return;
     mutate(() => {
       schema().items = items().filter((i) => !ids.has(i.id) && !(i.t === 'link' && ((i.a && ids.has(i.a.id)) || (i.b && ids.has(i.b.id)))));
     });
-    S.sels = [];
+    pruneSel();
     render(); updateUI();
   }
   function nudgeSel(dx, dy) {
-    const list = selItems().filter((i) => i.t !== 'link');
+    const list = selItems().filter((i) => i.t !== 'link' && !i.locked);
     if (!list.length) return;
     mutate(() => {
       for (const it of list) {
@@ -1186,6 +1220,17 @@
         else { it.x += dx; it.y += dy; }
       }
     });
+  }
+  // Figer : l'élément ne peut plus être déplacé ni modifié ; un cadenas rouge le signale (écran uniquement)
+  function toggleLock() {
+    const list = selItems();
+    if (!list.length) return;
+    const unlock = list.every((i) => i.locked);
+    mutate(() => { for (const it of list) { if (unlock) delete it.locked; else it.locked = true; } });
+  }
+  function unlockAll() {
+    if (!items().some((i) => i.locked)) return;
+    mutate(() => { for (const it of items()) delete it.locked; });
   }
   function selectAll() {
     S.tool = 'select';
@@ -1210,27 +1255,27 @@
   }
   function setMaterial(key) {
     if (!MAT.map[key]) return;
-    const ws = selWalls();
+    const ws = selWalls().filter((w) => !w.locked);
     S.mat = key;
     if (ws.length) mutate(() => { for (const w of ws) w.mat = key; });
     else updateUI();
   }
   function setFloorMaterial(key) {
     if (!MAT.floorMap[key]) return;
-    const fs = selItems().filter((i) => i.t === 'floor');
+    const fs = selItems().filter((i) => i.t === 'floor' && !i.locked);
     S.floorMat = key;
     if (fs.length) mutate(() => { for (const f of fs) f.mat = key; });
     else updateUI();
   }
   function changeThickness(dir) {
-    const ws = selWalls();
+    const ws = selWalls().filter((w) => !w.locked);
     const nt = clampTh((ws.length ? (ws[0].th || WALL_TH) : S.th) + 2 * dir);
     S.th = nt;
     if (ws.length) mutate(() => { for (const w of ws) w.th = nt; syncOpenings(); });
     else updateUI();
   }
   function applyAllWalls() {
-    const walls = items().filter((i) => i.t === 'wall');
+    const walls = items().filter((i) => i.t === 'wall' && !i.locked);
     if (!walls.length) return;
     const src = selWalls()[0];
     const mat = src ? (src.mat || 'plein') : S.mat;
@@ -1276,23 +1321,30 @@
     root.querySelectorAll('[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === S.tool)));
     root.querySelectorAll('.sch-sym').forEach((b) => b.classList.toggle('is-active', S.tool === 'place' && b.dataset.sym === S.placeKey));
     const list = selItems();
-    const movable = list.filter((i) => i.t !== 'link');
-    const t = list.length === 1 ? list[0].t : null;
+    const free = list.filter((i) => !i.locked);
+    const movable = free.filter((i) => i.t !== 'link');
+    const nLocked = list.length - free.length;
+    const t = list.length === 1 && free.length === 1 ? free[0].t : null;
     const en = (id, ok) => { const b = $(id); if (b) b.disabled = !ok; };
-    const canRot = movable.length > 1 || ['sym', 'door', 'window', 'floor'].includes(t);
-    const canMirror = movable.length > 1 || t === 'sym' || t === 'door' || t === 'floor';
-    const canSize = list.some((i) => ['sym', 'door', 'window', 'text'].includes(i.t));
+    const canRot = (list.length > 1 && movable.length > 0) || ['sym', 'door', 'window', 'floor'].includes(t);
+    const canMirror = (list.length > 1 && movable.length > 0) || t === 'sym' || t === 'door' || t === 'floor';
+    const canSize = free.some((i) => ['sym', 'door', 'window', 'text'].includes(i.t));
     en('#sch-rot-l', canRot);
     en('#sch-rot-r', canRot);
     en('#sch-mirror-h', canMirror);
     en('#sch-mirror-v', canMirror);
     en('#sch-size-m', canSize);
     en('#sch-size-p', canSize);
-    en('#sch-dup', movable.length > 0);
+    en('#sch-dup', list.some((i) => i.t !== 'link'));
     en('#sch-edit', t === 'text');
-    en('#sch-delete', list.length > 0);
+    en('#sch-delete', free.length > 0);
+    en('#sch-lock', list.length > 0);
+    en('#sch-unlockall', items().some((i) => i.locked));
+    $('#sch-lock').textContent = list.length && nLocked === list.length ? 'Libérer' : 'Figer';
     en('#sch-selectall', items().some((i) => i.t !== 'link'));
-    $('#sch-selcount').textContent = list.length > 1 ? list.length + ' éléments sélectionnés' : '';
+    $('#sch-selcount').textContent = list.length > 1
+      ? list.length + ' éléments sélectionnés' + (nLocked ? ' (dont ' + nLocked + ' figé' + (nLocked > 1 ? 's' : '') + ')' : '')
+      : (nLocked ? 'Élément figé' : '');
     $('#sch-multi').setAttribute('aria-pressed', String(S.multi && S.tool === 'select'));
     en('#sch-undo', S.undo.length > 0);
     en('#sch-redo', S.redo.length > 0);
@@ -1476,7 +1528,7 @@
       try {
         const data = JSON.parse(reader.result);
         if (!data || data.app !== 'electroformules-schema' || !data.schema || !Array.isArray(data.schema.items)) throw new Error('Fichier de schéma invalide');
-        const list = data.schema.items.map(cleanItem).filter(Boolean);
+        const list = data.schema.items.map((raw) => { const c = cleanItem(raw); if (c && raw && raw.locked === true) c.locked = true; return c; }).filter(Boolean);
         const s = newSchema(String(data.schema.name || 'Schéma importé').slice(0, 60));
         s.items = list;
         const rb = data.schema.bg;
@@ -1520,6 +1572,8 @@
       else { S.multi = !S.multi; updateUI(); }
     });
     $('#sch-selectall').addEventListener('click', selectAll);
+    $('#sch-lock').addEventListener('click', toggleLock);
+    $('#sch-unlockall').addEventListener('click', unlockAll);
     $('#sch-undo').addEventListener('click', doUndo);
     $('#sch-redo').addEventListener('click', doRedo);
     $('#sch-zoom-in').addEventListener('click', () => zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, 1.25));
@@ -1610,6 +1664,7 @@
     if (key === 'Enter' && S.tool === 'floor' && S.fdraft) { e.preventDefault(); closeFloor(); return; }
     if (mod && key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && key.toLowerCase() === 'y') { e.preventDefault(); doRedo(); return; }
+    if (!mod && (key === 'l' || key === 'L')) { toggleLock(); return; }
     if (mod && key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel(); return; }
     if (mod && key.toLowerCase() === 'a') { e.preventDefault(); selectAll(); return; }
     if (key === 'Delete' || key === 'Backspace') { if (S.sels.length) { e.preventDefault(); deleteSel(); } return; }
