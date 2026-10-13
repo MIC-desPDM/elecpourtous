@@ -808,3 +808,57 @@ dialog h2 {
 
 /* ---------- Sélection multiple ---------- */
 .sch-selcount { font-size: 0.8125rem; font-weight: 600; color: var(--accent); min-width: 8.5em; }
+
+/* ---------- Sous-parties : Implantation / Unifilaire ---------- */
+.sch-subtabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--surface);
+}
+.sch-subtab {
+  padding: 7px 16px;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  transition: all var(--transition);
+}
+.sch-subtab:hover { color: var(--accent); }
+.sch-subtab[aria-selected='true'] { background: var(--accent); color: var(--accent-contrast); }
+
+.sch-soon {
+  display: none;
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 8px 20px;
+  border-radius: 9999px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 700;
+  font-size: 0.9375rem;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+/* Unifilaire : seul le plan reste affiché (lecture seule) */
+[data-sch-mode='unifilaire'] .sch-implantation-ui,
+[data-sch-mode='unifilaire'] .sch-palette,
+[data-sch-mode='unifilaire'] .sch-hint { display: none; }
+[data-sch-mode='unifilaire'] .sch-layout { grid-template-columns: 1fr; height: calc(100dvh - 230px); }
+[data-sch-mode='unifilaire'] .sch-soon { display: block; }
+@media (max-width: 800px) {
+  [data-sch-mode='unifilaire'] .sch-layout { height: auto; }
+}
+@media (max-width: 640px) {
+  .sch-subtabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border-radius: var(--radius-md); }
+  .sch-subtab { padding: 8px 6px; font-size: 0.8125rem; white-space: normal; line-height: 1.25; border-radius: var(--radius-sm); }
+}

@@ -1521,7 +1521,7 @@ if ('serviceWorker' in navigator) {
 }
 
 
-/* ---------- Sections (onglets) : Formules de MELEC / Schémas Architectural ---------- */
+/* ---------- Sections (onglets) : Formules de MELEC / Schémas ---------- */
 (function () {
   const tabs = [...document.querySelectorAll('[data-view-tab]')];
   const searchWrap = document.querySelector('.search-wrap');

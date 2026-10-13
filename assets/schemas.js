@@ -516,6 +516,7 @@
   }
 
   function overlaySVG() {
+    if (S.readonly) return '';
     let o = '';
     const selList = selItems();
     for (const it of selList) o += selSVG(it, selList.length > 1);
@@ -857,7 +858,8 @@
     const p = toWorld(e);
     S.cursor = p;
 
-    if (e.button === 1 || e.button === 2 || S.space) {
+    // Schémas unifilaires : plan en lecture seule, on peut seulement déplacer la vue
+    if (S.readonly || e.button === 1 || e.button === 2 || S.space) {
       S.drag = { mode: 'pan', cx: e.clientX, cy: e.clientY, vx: S.view.x, vy: S.view.y };
       return;
     }
@@ -1238,6 +1240,7 @@
     zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015));
   }, { passive: false });
   svg.addEventListener('dblclick', (e) => {
+    if (S.readonly) return;
     if (S.tool === 'wall') { S.draft = null; renderOverlay(); return; }
     if (S.tool === 'floor') { closeFloor(); return; }
     if (S.tool === 'select') {
@@ -1910,6 +1913,11 @@
 
   function onKey(e) {
     if (root.hidden) return;
+    if (S.readonly) {                       // plan en lecture seule : Ctrl+A ne sélectionne pas toute la page
+      const t = (e.target && e.target.tagName) || '';
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !/INPUT|SELECT|TEXTAREA/.test(t)) e.preventDefault();
+      return;
+    }
     const tag = (e.target && e.target.tagName) || '';
     if (/INPUT|SELECT|TEXTAREA/.test(tag)) return;
     const mod = e.ctrlKey || e.metaKey;
@@ -1936,6 +1944,25 @@
     else if (key === 'ArrowDown') { if (S.sels.length) { e.preventDefault(); nudgeSel(0, step); } }
   }
 
+  /* ---------- Sous-parties : Implantation (édition) / Unifilaire (plan seul, à venir) ---------- */
+  const MODES = ['implantation', 'unifilaire'];
+  function setMode(mode) {
+    if (!MODES.includes(mode)) mode = 'implantation';
+    root.dataset.schMode = mode;
+    root.querySelectorAll('[data-sch-subtab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.schSubtab === mode)));
+    try { window.localStorage.setItem('ef_sch_mode', mode); } catch (e) { /* stockage indisponible */ }
+    const ro = mode === 'unifilaire';
+    if (ro !== !!S.readonly) {
+      S.readonly = ro;
+      S.drag = null; S.draft = null; S.fdraft = null; S.space = false;
+      if (ro) { S.sels = []; S.tool = 'select'; S.placeKey = null; }
+      if (ready) { render(); updateUI(); }
+    }
+  }
+  root.querySelectorAll('[data-sch-subtab]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.schSubtab)));
+  let startMode = 'implantation';
+  try { startMode = window.localStorage.getItem('ef_sch_mode') || startMode; } catch (e) { /* ignoré */ }
+
   /* ---------- Entrée publique ---------- */
   let ready = false;
   function show() {
@@ -1956,8 +1983,11 @@
     }
   }
 
+  setMode(startMode);
+
   window.SchemasEditor = {
     show,
+    setMode,
     // utilitaires exposés pour les tests
     _state: S, _db: () => db, _exportSVG: exportSVGString, _applyBackground: applyBackground, _wallPoints: wallPoints, _arcInfo: arcInfo, _bgGet: bgGet, _handleBgFile: handleBgFile,
   };
