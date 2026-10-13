@@ -545,6 +545,9 @@ M834 80h400000v40h-400000z"></path></svg></span></span></span><span class="vlist
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="wall" aria-pressed="false">Mur</button>
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="room" aria-pressed="false">Pièce</button>
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="floor" aria-pressed="false" title="Sol : rectangle ou forme libre, dessiné sous les murs">Sol</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="circle" aria-pressed="false" title="Cercle / ellipse, rempli d'un matériau de mur">Cercle</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="square" aria-pressed="false" title="Carré / rectangle, rempli d'un matériau de mur">Carré</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="triangle" aria-pressed="false" title="Triangle, rempli d'un matériau de mur">Triangle</button>
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="door" aria-pressed="false">Porte</button>
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="window" aria-pressed="false">Fenêtre</button>
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="text" aria-pressed="false">Texte</button>
@@ -583,7 +586,11 @@ M834 80h400000v40h-400000z"></path></svg></span></span></span><span class="vlist
       <span class="sch-thval" id="sch-th-val">12</span>
       <button type="button" class="btn btn-ghost btn-sm" id="sch-th-p" aria-label="Augmenter l'épaisseur">+</button>
       <button type="button" class="btn btn-ghost btn-sm" id="sch-mat-all" title="Applique le matériau et l'épaisseur du mur sélectionné (ou les réglages courants) à tous les murs">Appliquer à tous les murs</button>
-      <span class="sch-wallhint">Le matériau se choisit dans la palette, à gauche.</span>
+      <span class="sch-snap">Courbure</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-bend-m" aria-label="Courber dans un sens" title="Courber le mur sélectionné (ou faire glisser la poignée orange)">−</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-bend-p" aria-label="Courber dans l'autre sens" title="Courber le mur sélectionné dans l'autre sens">+</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-straight" title="Redresser le mur sélectionné">Redresser</button>
+      <span class="sch-wallhint">Matériau : palette à gauche. Poignée orange au milieu d'un mur sélectionné : courber.</span>
     </div>
 
     <div class="sch-bgbar" id="sch-bgbar" role="toolbar" aria-label="Fond de plan">

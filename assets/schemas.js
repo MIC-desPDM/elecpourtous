@@ -27,6 +27,8 @@
   const SEL = '#2f7df6';
   const WALL_TH = 8;        // épaisseur des murs créés avant l'ajout des matériaux
   const LINE = '#222';
+  // poignées d'une forme : 4 coins (proportionnel) puis 4 milieux de côtés (étirement)
+  const SHAPE_HANDLES = [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [1, 0], [0, 1], [-1, 0]];
 
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const uid = () => 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -199,15 +201,103 @@
   }
 
   // Place une porte / fenêtre : s'aligne sur le mur le plus proche
+  /* ----- Murs courbes : arc de cercle défini par sa flèche (distance entre le milieu de la corde et le sommet) ----- */
+  function arcInfo(w) {
+    const s = w.bend || 0;
+    if (!s) return null;
+    const dx = w.x2 - w.x1, dy = w.y2 - w.y1, L = Math.hypot(dx, dy);
+    if (L < 1) return null;
+    const r = (L * L / 4 + s * s) / (2 * Math.abs(s));
+    const nx = -dy / L, ny = dx / L, mx = (w.x1 + w.x2) / 2, my = (w.y1 + w.y2) / 2;
+    const off = s - Math.sign(s) * r;
+    const cx = mx + nx * off, cy = my + ny * off;
+    const half = Math.abs(s) <= L / 2 ? Math.asin(Math.min(1, L / 2 / r)) : Math.PI - Math.asin(Math.min(1, L / 2 / r));
+    let theta = 2 * half;
+    const ax = mx + nx * s, ay = my + ny * s;
+    const at = (ang) => {
+      const x0 = w.x1 - cx, y0 = w.y1 - cy;
+      return { x: cx + x0 * Math.cos(ang) - y0 * Math.sin(ang), y: cy + x0 * Math.sin(ang) + y0 * Math.cos(ang) };
+    };
+    // sens de parcours : le milieu de l'arc doit tomber sur le sommet
+    const p1 = at(theta / 2), p2 = at(-theta / 2);
+    if (Math.hypot(p2.x - ax, p2.y - ay) < Math.hypot(p1.x - ax, p1.y - ay)) theta = -theta;
+    return { r, L, s, nx, ny, mx, my, cx, cy, theta, ax, ay, large: Math.abs(s) > L / 2 ? 1 : 0, sweep: theta > 0 ? 1 : 0, at };
+  }
+  function wallPoints(w, n) {
+    const a = arcInfo(w);
+    if (!a) return [{ x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 }];
+    const pts = [];
+    for (let i = 0; i <= n; i++) pts.push(a.at((a.theta * i) / n));
+    return pts;
+  }
+  function wallPathD(w) {
+    const a = arcInfo(w);
+    return a ? `M${w.x1} ${w.y1} A${rnd(a.r)} ${rnd(a.r)} 0 ${a.large} ${a.sweep} ${w.x2} ${w.y2}` : null;
+  }
+  // point le plus proche de p sur l'axe du mur (droit ou courbe) + direction de la tangente
+  function wallNearest(w, p) {
+    const pts = wallPoints(w, 48);
+    let best = null;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const r = distSeg(p, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
+      if (!best || r.d < best.d) best = { d: r.d, qx: r.qx, qy: r.qy, ang: (Math.atan2(pts[i + 1].y - pts[i].y, pts[i + 1].x - pts[i].x) * 180) / Math.PI };
+    }
+    return best;
+  }
+  function bendHandlePos(w) {
+    const a = arcInfo(w);
+    return a ? { x: a.ax, y: a.ay } : { x: (w.x1 + w.x2) / 2, y: (w.y1 + w.y2) / 2 };
+  }
+  function wallBendHandleAt(w, p) {
+    const q = bendHandlePos(w);
+    return Math.hypot(p.x - q.x, p.y - q.y) <= 12 / S.view.k;
+  }
+
+  /* ----- Formes (cercle, carré, triangle) remplies d'un matériau de mur ----- */
+  function shapeHandlePos(s, hx, hy) {
+    const a = rad(s.rot || 0), lx = (hx * s.w) / 2, ly = (hy * s.h) / 2;
+    return { x: s.x + lx * Math.cos(a) - ly * Math.sin(a), y: s.y + lx * Math.sin(a) + ly * Math.cos(a) };
+  }
+  function shapeHandleAt(s, p) {
+    const r = 12 / S.view.k;
+    for (const [hx, hy] of SHAPE_HANDLES) {
+      const q = shapeHandlePos(s, hx, hy);
+      if (Math.hypot(p.x - q.x, p.y - q.y) <= r) return { hx, hy };
+    }
+    return null;
+  }
+  function inShape(s, p, tol) {
+    const l = toLocal(s, p), hw = s.w / 2 + tol, hh = s.h / 2 + tol;
+    if (s.kind === 'circle') return (l.x * l.x) / (hw * hw) + (l.y * l.y) / (hh * hh) <= 1;
+    if (s.kind === 'triangle') {
+      if (l.y < -hh || l.y > hh) return false;
+      return Math.abs(l.x) <= hw * ((l.y + hh) / (2 * hh));
+    }
+    return Math.abs(l.x) <= hw && Math.abs(l.y) <= hh;
+  }
+  // rectangle englobant d'une forme à partir d'un glisser (Maj = carré / cercle parfait) ; clic simple = taille standard
+  function shapeFromDrag(a, q, moved, shift) {
+    if (!moved || (Math.abs(q.x - a.x) < 10 && Math.abs(q.y - a.y) < 10)) return { x: a.x, y: a.y, w: 60, h: 60 };
+    let dx = q.x - a.x, dy = q.y - a.y;
+    if (shift) { const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = (dx < 0 ? -1 : 1) * m; dy = (dy < 0 ? -1 : 1) * m; }
+    return { x: a.x + dx / 2, y: a.y + dy / 2, w: Math.max(10, Math.abs(dx)), h: Math.max(10, Math.abs(dy)) };
+  }
+  function addShape(kind, g) {
+    const it = { id: uid(), t: 'shape', kind, x: rnd(g.x), y: rnd(g.y), w: rnd(g.w), h: rnd(g.h), rot: 0, mat: S.mat };
+    mutate(() => items().push(it));
+    S.sel = it.id;
+    renderOverlay(); updateUI();
+  }
+
   function placeOpening(it, c) {
     let best = null;
     for (const w of items()) {
       if (w.t !== 'wall') continue;
-      const r = distSeg(c, w.x1, w.y1, w.x2, w.y2);
-      if (r.d <= 16 && (!best || r.d < best.d)) best = { d: r.d, qx: r.qx, qy: r.qy, w };
+      const r = wallNearest(w, c);
+      if (r.d <= 16 && (!best || r.d < best.d)) best = { d: r.d, qx: r.qx, qy: r.qy, ang: r.ang, w };
     }
     if (best) {
-      const wa = (Math.atan2(best.w.y2 - best.w.y1, best.w.x2 - best.w.x1) * 180) / Math.PI;
+      const wa = best.ang;
       const gap = (a, b) => Math.abs((((a - b) % 360) + 540) % 360 - 180);
       const cur = it.rot || 0;
       const pick = gap(wa, cur) <= gap(wa + 180, cur) ? wa : wa + 180;
@@ -245,10 +335,19 @@
   function wallOutlineSVG(w) {
     const m = w.mat || 'plein';
     if (m === 'plein' || m === 'verre') return '';
+    const dc = w.bend ? wallPathD(w) : null;
+    if (dc) return `<path d="${dc}" fill="none" stroke="${LINE}" stroke-width="${(w.th || WALL_TH) + 3}" stroke-linecap="square"/>`;
     return wallRect(w, `fill="#fff" stroke="${LINE}" stroke-width="3" stroke-linejoin="miter"`);
   }
   function wallFillSVG(w) {
     const f = MAT.fill(w.mat || 'plein');
+    const dc = w.bend ? wallPathD(w) : null;
+    if (dc) {
+      const th = w.th || WALL_TH;
+      if (f === null) return `<path d="${dc}" fill="none" stroke="${LINE}" stroke-width="1.8" stroke-linecap="square"/>`;
+      return (f.startsWith('url(') ? `<path d="${dc}" fill="none" stroke="#fff" stroke-width="${th}" stroke-linecap="square"/>` : '') +
+        `<path d="${dc}" fill="none" stroke="${f}" stroke-width="${th}" stroke-linecap="square"/>`;
+    }
     if (f === null) {
       return `<line x1="${w.x1}" y1="${w.y1}" x2="${w.x2}" y2="${w.y2}" stroke="${LINE}" stroke-width="1.8" stroke-linecap="square"/>`;
     }
@@ -291,6 +390,25 @@
     return `<text font-size="${t.size}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="600" fill="#222">${tsp}</text>`;
   }
 
+  function shapeEl(s, attrs) {
+    const hw = s.w / 2, hh = s.h / 2;
+    let el;
+    if (s.kind === 'circle') el = `<ellipse cx="0" cy="0" rx="${hw}" ry="${hh}" ${attrs}/>`;
+    else if (s.kind === 'triangle') el = `<polygon points="0,${-hh} ${hw},${hh} ${-hw},${hh}" ${attrs}/>`;
+    else el = `<rect x="${-hw}" y="${-hh}" width="${s.w}" height="${s.h}" ${attrs}/>`;
+    return `<g transform="translate(${s.x} ${s.y}) rotate(${s.rot || 0})">${el}</g>`;
+  }
+  function shapeOutlineSVG(s) {
+    const m = s.mat || 'plein';
+    if (m === 'plein' || m === 'verre') return '';
+    return shapeEl(s, `fill="#fff" stroke="${LINE}" stroke-width="3"`);
+  }
+  function shapeFillSVG(s) {
+    const f = MAT.fill(s.mat || 'plein');
+    if (f === null) return shapeEl(s, `fill="none" stroke="${LINE}" stroke-width="1.8"`);
+    return (f.startsWith('url(') ? shapeEl(s, 'fill="#fff"') : '') + shapeEl(s, `fill="${f}"`);
+  }
+
   // Sols : surfaces (polygones) dessinées sous les murs
   function floorSVG(f) {
     const pts = f.pts.map((q) => q[0] + ',' + q[1]).join(' ');
@@ -311,9 +429,10 @@
   }
 
   function sceneSVG(list) {
-    let floors = '', walls = '', open = '', links = '', syms = '', texts = '', wallsFill = '';
+    let floors = '', walls = '', open = '', links = '', syms = '', texts = '', wallsFill = '', shOut = '', shFill = '';
     for (const it of list) {
       if (it.t === 'floor') floors += floorSVG(it);
+      else if (it.t === 'shape') { shOut += shapeOutlineSVG(it); shFill += shapeFillSVG(it); }
       else if (it.t === 'door' || it.t === 'window') open += openingSVG(it);
       else if (it.t === 'link') links += linkSVG(list, it);
       else if (it.t === 'sym') syms += symSVG(it);
@@ -322,15 +441,33 @@
     // Les murs épais sont dessinés en dernier : une cloison fine s'arrête proprement contre un mur épais
     const wl = list.filter((i) => i.t === 'wall').sort((a, b) => (a.th || WALL_TH) - (b.th || WALL_TH));
     for (const w of wl) { walls += wallOutlineSVG(w); wallsFill += wallFillSVG(w); }
-    return floors + walls + wallsFill + open + links + syms + texts;
+    return floors + walls + shOut + wallsFill + shFill + open + links + syms + texts;
   }
 
   function selSVG(it, multi) {
     const dash = `fill="none" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"`;
     const handle = (x, y) => (multi || it.locked) ? '' : `<circle cx="${x}" cy="${y}" r="${7 / S.view.k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
     if (it.t === 'wall') {
-      return `<line x1="${it.x1}" y1="${it.y1}" x2="${it.x2}" y2="${it.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="${(it.th || WALL_TH) + 6}" stroke-linecap="round"/>` +
-        handle(it.x1, it.y1) + handle(it.x2, it.y2);
+      const dc = it.bend ? wallPathD(it) : null;
+      const sw = (it.th || WALL_TH) + 6;
+      const halo = dc
+        ? `<path d="${dc}" fill="none" stroke="${SEL}" stroke-opacity="0.35" stroke-width="${sw}" stroke-linecap="round"/>`
+        : `<line x1="${it.x1}" y1="${it.y1}" x2="${it.x2}" y2="${it.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="${sw}" stroke-linecap="round"/>`;
+      let bh = '';
+      if (!(multi || it.locked)) {
+        const b = bendHandlePos(it), k = S.view.k;
+        bh = `<rect x="${b.x - 6 / k}" y="${b.y - 6 / k}" width="${12 / k}" height="${12 / k}" transform="rotate(45 ${b.x} ${b.y})" fill="#fff" stroke="#ff8a00" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+      }
+      return halo + handle(it.x1, it.y1) + handle(it.x2, it.y2) + bh;
+    }
+    if (it.t === 'shape') {
+      const hw = it.w / 2, hh = it.h / 2;
+      const el = it.kind === 'circle' ? `<ellipse rx="${hw}" ry="${hh}" ${dash}/>`
+        : it.kind === 'triangle' ? `<polygon points="0,${-hh} ${hw},${hh} ${-hw},${hh}" ${dash}/>`
+        : `<rect x="${-hw}" y="${-hh}" width="${it.w}" height="${it.h}" ${dash}/>`;
+      let o = `<g transform="translate(${it.x} ${it.y}) rotate(${it.rot || 0})">${el}<rect x="${-hw}" y="${-hh}" width="${it.w}" height="${it.h}" ${dash} stroke-opacity="0.35"/></g>`;
+      for (const [hx, hy] of SHAPE_HANDLES) { const q = shapeHandlePos(it, hx, hy); o += handle(q.x, q.y); }
+      return o;
     }
     if (it.t === 'link') {
       const a = resolveEnd(items(), it.a), b = resolveEnd(items(), it.b);
@@ -414,6 +551,11 @@
       const q = c ? snapPt(c, GRID) : S.draft;
       o += `<line x1="${S.draft.x}" y1="${S.draft.y}" x2="${q.x}" y2="${q.y}" stroke="${SEL}" stroke-opacity="0.6" stroke-width="${S.th}" stroke-linecap="square"/>`;
       o += `<circle cx="${S.draft.x}" cy="${S.draft.y}" r="${5 / k}" fill="${SEL}"/>`;
+    }
+    if ((S.tool === 'circle' || S.tool === 'square' || S.tool === 'triangle') && c) {
+      const dr = S.drag && S.drag.mode === 'shapeNew' ? S.drag : null;
+      const g = dr ? shapeFromDrag(dr.a, snapPt(c, STEP), dr.moved, dr.shift) : { x: snapPt(c, STEP).x, y: snapPt(c, STEP).y, w: 60, h: 60 };
+      o += `<g opacity="0.55">${shapeFillSVG({ kind: S.tool, x: g.x, y: g.y, w: g.w, h: g.h, rot: 0, mat: S.mat })}</g>`;
     }
     if (S.tool === 'floor' && S.fdraft && c) {
       const q = snapPt(c, GRID), a = S.fdraft[0];
@@ -526,8 +668,12 @@
     }
     for (let i = list.length - 1; i >= 0; i--) {
       const it = list[i];
+      if (it.t === 'shape' && inShape(it, p, tol)) return it;
+    }
+    for (let i = list.length - 1; i >= 0; i--) {
+      const it = list[i];
       if (it.t !== 'wall') continue;
-      if (distSeg(p, it.x1, it.y1, it.x2, it.y2).d <= (it.th || WALL_TH) / 2 + tol) return it;
+      if (wallNearest(it, p).d <= (it.th || WALL_TH) / 2 + tol) return it;
     }
     for (let i = list.length - 1; i >= 0; i--) {
       const it = list[i];
@@ -568,7 +714,14 @@
   function itemBounds(it) {
     if (it.t === 'wall') {
       const m = (it.th || WALL_TH) / 2 + 3;
-      return [Math.min(it.x1, it.x2) - m, Math.min(it.y1, it.y2) - m, Math.max(it.x1, it.x2) + m, Math.max(it.y1, it.y2) + m];
+      const pts = wallPoints(it, 24);
+      const xs = pts.map((q) => q.x), ys = pts.map((q) => q.y);
+      return [Math.min(...xs) - m, Math.min(...ys) - m, Math.max(...xs) + m, Math.max(...ys) + m];
+    }
+    if (it.t === 'shape') {
+      const a = rad(it.rot || 0), c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+      const hw = (it.w * c + it.h * s) / 2, hh = (it.w * s + it.h * c) / 2;
+      return [it.x - hw, it.y - hh, it.x + hw, it.y + hh];
     }
     if (it.t === 'sym') {
       const [a, b, c, d] = SYM.map[it.key].b;
@@ -628,6 +781,9 @@
   const HINTS = {
     select: 'Sélection : cliquez un élément pour le déplacer ; Maj+clic en ajoute ou en retire ; Maj+glisser sur le fond trace un rectangle de sélection ; glisser le fond (ou Espace+glisser) pour vous déplacer ; molette ou pincement pour zoomer.',
     multi: 'Sélection multiple : touchez les éléments pour les ajouter ou les retirer ; glissez sur le fond pour tracer un rectangle (tout ce qui est entièrement dedans est sélectionné). Déplacement de la vue : deux doigts, clic droit ou molette.',
+    circle: 'Cercle : faites glisser pour fixer son encombrement (Maj : cercle parfait) ou cliquez pour en poser un de taille standard. Rempli du matériau de mur choisi dans la palette ; redimensionnez avec les poignées.',
+    square: 'Carré : faites glisser pour fixer son encombrement (Maj : carré parfait) ou cliquez pour en poser un de taille standard. Rempli du matériau de mur choisi dans la palette ; redimensionnez avec les poignées.',
+    triangle: 'Triangle : faites glisser pour fixer sa base et sa hauteur ou cliquez pour en poser un de taille standard. Rempli du matériau de mur choisi dans la palette ; pivotez-le avec les boutons Pivoter.',
     floor: 'Sol : faites glisser d’un angle à l’angle opposé (rectangle), ou cliquez les sommets d’une forme libre ; fermez avec un clic sur le premier point, un double-clic ou Entrée. Matériau : palette « Sols ». Le sol se dessine sous les murs.',
     wall: 'Mur : cliquez pour poser le point de départ, puis cliquez à chaque angle. Double-clic ou Échap pour terminer. Matériau : palette ; épaisseur : barre « Murs ».',
     room: 'Pièce : faites glisser d’un angle à l’angle opposé pour créer les 4 murs.',
@@ -719,6 +875,14 @@
           const vi = floorHandleAt(one, p);
           if (vi >= 0) { S.drag = { mode: 'floorVertex', id: one.id, i: vi, before: snapJSON() }; return; }
         }
+        if (one && one.t === 'wall' && !one.locked && wallBendHandleAt(one, p)) {
+          S.drag = { mode: 'wallBend', id: one.id, before: snapJSON() };
+          return;
+        }
+        if (one && one.t === 'shape' && !one.locked) {
+          const sh = shapeHandleAt(one, p);
+          if (sh) { S.drag = { mode: 'shapeResize', id: one.id, hx: sh.hx, hy: sh.hy, orig: clone(one), before: snapJSON() }; return; }
+        }
         const hit = hitItem(p);
         const here = { cx: e.clientX, cy: e.clientY, moved: false, vx: S.view.x, vy: S.view.y };
         if (hit) {
@@ -752,6 +916,12 @@
         renderOverlay();
         break;
       }
+      case 'circle':
+      case 'square':
+      case 'triangle':
+        S.drag = { mode: 'shapeNew', kind: S.tool, a: snapPt(p, STEP), cx: e.clientX, cy: e.clientY, moved: false, shift: e.shiftKey };
+        renderOverlay();
+        break;
       case 'floor': {
         const q = snapPt(p, GRID);
         if (!S.fdraft) { S.fdraft = [{ x: q.x, y: q.y }]; S.drag = { mode: 'floor', fresh: true, cx: e.clientX, cy: e.clientY, moved: false }; }
@@ -818,6 +988,7 @@
     const d = S.drag;
     if (!d) { renderOverlay(); return; }
     if (d.cx !== undefined && !d.moved && Math.hypot(e.clientX - d.cx, e.clientY - d.cy) > 3) d.moved = true;
+    if (d.mode === 'shapeNew') d.shift = e.shiftKey;
 
     if (d.mode === 'pan') {
       S.view.x = d.vx + (e.clientX - d.cx);
@@ -860,7 +1031,7 @@
       } else if (it.t === 'floor') {
         const ex = snapOn(o.pts[0][0] + dx, GRID) - o.pts[0][0], ey = snapOn(o.pts[0][1] + dy, GRID) - o.pts[0][1];
         it.pts = o.pts.map(([x, y]) => [x + ex, y + ey]);
-      } else if (it.t === 'sym' || it.t === 'text') {
+      } else if (it.t === 'sym' || it.t === 'text' || it.t === 'shape') {
         it.x = snapOn(o.x + dx, STEP); it.y = snapOn(o.y + dy, STEP);
       } else if (it.t === 'door' || it.t === 'window') {
         const c0 = openingCenter(o);
@@ -886,6 +1057,42 @@
         b.x = rnd(left ? ox - w : ox); b.y = rnd(top ? oy - h : oy);
       }
       renderBg();
+      renderOverlay();
+      return;
+    }
+    if (d.mode === 'wallBend') {
+      const w = findItem(d.id);
+      if (!w) return;
+      const dx = w.x2 - w.x1, dy = w.y2 - w.y1, L = Math.hypot(dx, dy);
+      if (L < 1) return;
+      let s = (p.x - (w.x1 + w.x2) / 2) * (-dy / L) + (p.y - (w.y1 + w.y2) / 2) * (dx / L);
+      s = snapOn(s, 5);
+      if (Math.abs(s) < 4) s = 0;
+      s = Math.max(-L, Math.min(L, s));
+      if (s) w.bend = rnd(s); else delete w.bend;
+      sceneG.innerHTML = sceneSVG(items());
+      renderOverlay();
+      return;
+    }
+    if (d.mode === 'shapeResize') {
+      const s = findItem(d.id);
+      if (!s) return;
+      const o = d.orig, MIN = 10, hx = d.hx, hy = d.hy;
+      const l = toLocal(o, snapPt(p, STEP));
+      const ox = -hx * o.w / 2, oy = -hy * o.h / 2;
+      let nw = o.w, nh = o.h;
+      if (hx !== 0) nw = Math.max(MIN, (l.x - ox) * hx);
+      if (hy !== 0) nh = Math.max(MIN, (l.y - oy) * hy);
+      if (hx !== 0 && hy !== 0 && !e.shiftKey) {        // coins : proportions conservées (Maj = libre)
+        const k = Math.max(nw / o.w, nh / o.h);
+        nw = Math.max(MIN, o.w * k); nh = Math.max(MIN, o.h * k);
+      }
+      const cx = hx !== 0 ? ox + hx * nw / 2 : 0, cy = hy !== 0 ? oy + hy * nh / 2 : 0;
+      const a = rad(o.rot || 0);
+      s.w = rnd(nw); s.h = rnd(nh);
+      s.x = rnd(o.x + cx * Math.cos(a) - cy * Math.sin(a));
+      s.y = rnd(o.y + cx * Math.sin(a) + cy * Math.cos(a));
+      sceneG.innerHTML = sceneSVG(items());
       renderOverlay();
       return;
     }
@@ -923,7 +1130,7 @@
 
     if (d.mode === 'pan') { rememberView(); return; }
     if (d.mode === 'bgMove' || d.mode === 'bgScale') { save(); renderOverlay(); return; }
-    if (d.mode === 'move' || d.mode === 'gmove' || d.mode === 'wallEnd' || d.mode === 'floorVertex') {
+    if (d.mode === 'move' || d.mode === 'gmove' || d.mode === 'wallEnd' || d.mode === 'floorVertex' || d.mode === 'wallBend' || d.mode === 'shapeResize') {
       if (d.panned) rememberView();
       const now = snapJSON();
       if (now !== d.before) { pushUndo(d.before); save(); }
@@ -958,6 +1165,10 @@
         S.draft = { x: q.x, y: q.y };
       }
       renderOverlay();
+      return;
+    }
+    if (d.mode === 'shapeNew') {
+      addShape(d.kind, shapeFromDrag(d.a, snapPt(p, STEP), d.moved, e.shiftKey));
       return;
     }
     if (d.mode === 'floor') {
@@ -1010,7 +1221,7 @@
   function onCancel(e) {
     S.pointers.delete(e.pointerId);
     if (S.pointers.size < 2) S.gesture = null;
-    if (S.drag && (S.drag.mode === 'move' || S.drag.mode === 'gmove' || S.drag.mode === 'wallEnd' || S.drag.mode === 'floorVertex')) setItems(JSON.parse(S.drag.before));
+    if (S.drag && (S.drag.mode === 'move' || S.drag.mode === 'gmove' || S.drag.mode === 'wallEnd' || S.drag.mode === 'floorVertex' || S.drag.mode === 'wallBend' || S.drag.mode === 'shapeResize')) setItems(JSON.parse(S.drag.before));
     S.drag = null;
     renderOverlay();
   }
@@ -1042,7 +1253,7 @@
     const one = sel();
     if (S.sels.length > 1 || (one && one.t === 'floor')) { rotateGroup(dir); return; }
     const it = sel();
-    if (!it || it.locked || !['sym', 'door', 'window'].includes(it.t)) return;
+    if (!it || it.locked || !['sym', 'door', 'window', 'shape'].includes(it.t)) return;
     mutate(() => { it.rot = ((it.rot || 0) + 90 * dir + 360) % 360; });
   }
 
@@ -1056,14 +1267,18 @@
     if (it.t === 'window') return;          // une fenêtre est symétrique : seule sa rotation change
     if (axis === 'h') it.mx = !it.mx; else it.my = !it.my;
   }
+  // Forme : cercle et carré sont symétriques ; le triangle (pointe en haut) change de sens avec un miroir vertical
+  function mirrorShape(it, axis) {
+    it.rot = rnd((((-(it.rot || 0) + (axis === 'v' && it.kind === 'triangle' ? 180 : 0)) % 360) + 360) % 360);
+  }
   function mirrorSel(axis) {
     const one = sel();
     if (S.sels.length > 1 || (one && one.t === 'floor')) { mirrorGroup(axis); return; }
     const it = sel();
-    if (!it || it.locked || (it.t !== 'sym' && it.t !== 'door')) return;
+    if (!it || it.locked || (it.t !== 'sym' && it.t !== 'door' && it.t !== 'shape')) return;
     mutate(() => {
       const c = it.t === 'door' ? openingCenter(it) : null;
-      mirrorInPlace(it, axis);
+      if (it.t === 'shape') mirrorShape(it, axis); else mirrorInPlace(it, axis);
       if (c) {
         const a = rad(it.rot);
         it.x = rnd(c.x - Math.cos(a) * it.len / 2);
@@ -1081,9 +1296,13 @@
       it.x = rnd(c.x - Math.cos(a) * it.len / 2);
       it.y = rnd(c.y - Math.sin(a) * it.len / 2);
     } else if (it.t === 'text') it.size = Math.max(8, Math.min(80, it.size + 2 * dir));
+    else if (it.t === 'shape') {
+      const f = dir > 0 ? 1.15 : 1 / 1.15;
+      it.w = rnd(Math.max(10, Math.min(2000, it.w * f))); it.h = rnd(Math.max(10, Math.min(2000, it.h * f)));
+    }
   }
   function resizeSel(dir) {
-    const list = selItems().filter((i) => !i.locked && ['sym', 'door', 'window', 'text'].includes(i.t));
+    const list = selItems().filter((i) => !i.locked && ['sym', 'door', 'window', 'text', 'shape'].includes(i.t));
     if (!list.length) return;
     mutate(() => list.forEach((it) => resizeItem(it, dir)));
   }
@@ -1126,10 +1345,10 @@
           it.x1 = a.x; it.y1 = a.y; it.x2 = b.x; it.y2 = b.y;
         } else if (it.t === 'floor') {
           it.pts = it.pts.map(([x, y]) => { const q = rp(x, y); return [q.x, q.y]; });
-        } else if (it.t === 'sym' || it.t === 'text') {
+        } else if (it.t === 'sym' || it.t === 'text' || it.t === 'shape') {
           const q = rp(it.x, it.y);
           it.x = q.x; it.y = q.y;
-          if (it.t === 'sym') it.rot = ((it.rot || 0) + 90 * dir + 360) % 360;
+          if (it.t === 'sym' || it.t === 'shape') it.rot = ((it.rot || 0) + 90 * dir + 360) % 360;
         } else {
           const cc = openingCenter(it), q = rp(cc.x, cc.y);
           it.rot = ((it.rot || 0) + 90 * dir + 360) % 360;
@@ -1150,10 +1369,14 @@
       for (const it of list) {
         if (it.t === 'wall') {
           if (axis === 'h') { it.x1 = rx(it.x1); it.x2 = rx(it.x2); } else { it.y1 = ry(it.y1); it.y2 = ry(it.y2); }
+          if (it.bend) it.bend = -it.bend;      // un miroir inverse le côté de la courbure
         } else if (it.t === 'floor') {
           it.pts = it.pts.map(([x, y]) => (axis === 'h' ? [rx(x), y] : [x, ry(y)]));
         } else if (it.t === 'text') {
           if (axis === 'h') it.x = rx(it.x); else it.y = ry(it.y);   // le texte reste lisible : seule sa position change
+        } else if (it.t === 'shape') {
+          mirrorShape(it, axis);
+          if (axis === 'h') it.x = rx(it.x); else it.y = ry(it.y);
         } else if (it.t === 'sym') {
           mirrorInPlace(it, axis);
           if (axis === 'h') it.x = rx(it.x); else it.y = ry(it.y);
@@ -1249,16 +1472,34 @@
       if (o.t !== 'door' && o.t !== 'window') continue;
       const c = openingCenter(o);
       for (const w of list) {
-        if (w.t === 'wall' && distSeg(c, w.x1, w.y1, w.x2, w.y2).d <= 2) o.th = w.th || WALL_TH;
+        if (w.t === 'wall' && wallNearest(w, c).d <= 2) o.th = w.th || WALL_TH;
       }
     }
   }
   function setMaterial(key) {
     if (!MAT.map[key]) return;
-    const ws = selWalls().filter((w) => !w.locked);
+    const ws = selItems().filter((w) => (w.t === 'wall' || w.t === 'shape') && !w.locked);
     S.mat = key;
     if (ws.length) mutate(() => { for (const w of ws) w.mat = key; });
     else updateUI();
+  }
+  function bendSelected(dir) {
+    const ws = selWalls().filter((w) => !w.locked);
+    if (!ws.length) return;
+    mutate(() => {
+      for (const w of ws) {
+        const L = Math.hypot(w.x2 - w.x1, w.y2 - w.y1);
+        let b = (w.bend || 0) + 10 * dir;
+        if (Math.abs(b) < 3) b = 0;
+        b = Math.max(-L, Math.min(L, b));
+        if (b) w.bend = rnd(b); else delete w.bend;
+      }
+    });
+  }
+  function straightenSelected() {
+    const ws = selWalls().filter((w) => !w.locked && w.bend);
+    if (!ws.length) return;
+    mutate(() => { for (const w of ws) delete w.bend; });
   }
   function setFloorMaterial(key) {
     if (!MAT.floorMap[key]) return;
@@ -1326,9 +1567,9 @@
     const nLocked = list.length - free.length;
     const t = list.length === 1 && free.length === 1 ? free[0].t : null;
     const en = (id, ok) => { const b = $(id); if (b) b.disabled = !ok; };
-    const canRot = (list.length > 1 && movable.length > 0) || ['sym', 'door', 'window', 'floor'].includes(t);
-    const canMirror = (list.length > 1 && movable.length > 0) || t === 'sym' || t === 'door' || t === 'floor';
-    const canSize = free.some((i) => ['sym', 'door', 'window', 'text'].includes(i.t));
+    const canRot = (list.length > 1 && movable.length > 0) || ['sym', 'door', 'window', 'floor', 'shape'].includes(t);
+    const canMirror = (list.length > 1 && movable.length > 0) || t === 'sym' || t === 'door' || t === 'floor' || t === 'shape';
+    const canSize = free.some((i) => ['sym', 'door', 'window', 'text', 'shape'].includes(i.t));
     en('#sch-rot-l', canRot);
     en('#sch-rot-r', canRot);
     en('#sch-mirror-h', canMirror);
@@ -1339,6 +1580,10 @@
     en('#sch-edit', t === 'text');
     en('#sch-delete', free.length > 0);
     en('#sch-lock', list.length > 0);
+    const bw = selWalls().filter((w) => !w.locked);
+    en('#sch-bend-m', bw.length > 0);
+    en('#sch-bend-p', bw.length > 0);
+    en('#sch-straight', bw.some((w) => w.bend));
     en('#sch-unlockall', items().some((i) => i.locked));
     $('#sch-lock').textContent = list.length && nLocked === list.length ? 'Libérer' : 'Figer';
     en('#sch-selectall', items().some((i) => i.t !== 'link'));
@@ -1349,9 +1594,10 @@
     en('#sch-undo', S.undo.length > 0);
     en('#sch-redo', S.redo.length > 0);
     const ws = selWalls();
-    const sameMat = ws.length && ws.every((w) => (w.mat || 'plein') === (ws[0].mat || 'plein'));
+    const mt = selItems().filter((i) => i.t === 'wall' || i.t === 'shape');
+    const sameMat = mt.length && mt.every((w) => (w.mat || 'plein') === (mt[0].mat || 'plein'));
     const sameTh = ws.length && ws.every((w) => (w.th || WALL_TH) === (ws[0].th || WALL_TH));
-    const curMat = ws.length ? (sameMat ? (ws[0].mat || 'plein') : null) : S.mat;
+    const curMat = mt.length ? (sameMat ? (mt[0].mat || 'plein') : null) : S.mat;
     root.querySelectorAll('.sch-mat[data-mat]').forEach((b) => b.classList.toggle('is-active', b.dataset.mat === curMat));
     const fl = selItems().filter((i) => i.t === 'floor');
     const sameFl = fl.length && fl.every((f) => f.mat === fl[0].mat);
@@ -1498,10 +1744,15 @@
         if (![it.x1, it.y1, it.x2, it.y2].every(num)) return null;
         return { id, t: 'wall', x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2,
           ...(typeof it.mat === 'string' && MAT.map[it.mat] ? { mat: it.mat } : {}),
-          ...(num(it.th) ? { th: clampTh(it.th) } : {}) };
+          ...(num(it.th) ? { th: clampTh(it.th) } : {}),
+          ...(num(it.bend) && it.bend !== 0 ? { bend: Math.max(-5000, Math.min(5000, it.bend)) } : {}) };
       case 'door': case 'window':
         if (![it.x, it.y, it.len].every(num)) return null;
         return { id, t: it.t, x: it.x, y: it.y, rot: num(it.rot) ? it.rot : 0, len: Math.max(20, Math.min(200, it.len)), ...(num(it.th) ? { th: clampTh(it.th) } : {}), ...(it.t === 'door' ? { ...(it.mx ? { mx: true } : {}), ...(it.my || it.flip ? { my: true } : {}) } : {}) };
+      case 'shape':
+        if (!['circle', 'square', 'triangle'].includes(it.kind) || ![it.x, it.y, it.w, it.h].every(num)) return null;
+        return { id, t: 'shape', kind: it.kind, x: it.x, y: it.y, w: Math.max(10, Math.min(2000, it.w)), h: Math.max(10, Math.min(2000, it.h)),
+          rot: num(it.rot) ? it.rot : 0, mat: typeof it.mat === 'string' && MAT.map[it.mat] ? it.mat : 'plein' };
       case 'floor': {
         if (!Array.isArray(it.pts) || it.pts.length < 3 || it.pts.length > 200) return null;
         const pts = it.pts.map((q) => (Array.isArray(q) && q.length === 2 && num(q[0]) && num(q[1]) ? [q[0], q[1]] : null));
@@ -1565,6 +1816,9 @@
     $('#sch-th-m').addEventListener('click', () => changeThickness(-1));
     $('#sch-th-p').addEventListener('click', () => changeThickness(1));
     $('#sch-mat-all').addEventListener('click', applyAllWalls);
+    $('#sch-bend-m').addEventListener('click', () => bendSelected(-1));
+    $('#sch-bend-p').addEventListener('click', () => bendSelected(1));
+    $('#sch-straight').addEventListener('click', straightenSelected);
     root.querySelectorAll('[data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
     $('#sch-snap').addEventListener('change', (e) => { S.snap = e.target.checked; });
     $('#sch-multi').addEventListener('click', () => {
@@ -1705,7 +1959,7 @@
   window.SchemasEditor = {
     show,
     // utilitaires exposés pour les tests
-    _state: S, _db: () => db, _exportSVG: exportSVGString, _applyBackground: applyBackground, _bgGet: bgGet, _handleBgFile: handleBgFile,
+    _state: S, _db: () => db, _exportSVG: exportSVGString, _applyBackground: applyBackground, _wallPoints: wallPoints, _arcInfo: arcInfo, _bgGet: bgGet, _handleBgFile: handleBgFile,
   };
 
   if (!root.hidden) show();
