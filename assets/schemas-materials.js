@@ -77,10 +77,9 @@
       ],
     },
     {
-      name: 'Verre et carrelage',
+      name: 'Verre',
       items: [
         { key: 'blocVerre', name: 'Bloc de verre', def: pat('blocVerre', 8, 12, L(0, 0, 0, 12, 1) + R(1.2, 2.5, 5.6, 7, 0.7), { center: true }) },
-        { key: 'carrelage', name: 'Carrelage de sol', def: pat('carrelage', 5, 5, L(0, 0, 5, 0, 0.8) + L(0, 0, 0, 5, 0.8)) },
       ],
     },
     {
@@ -96,8 +95,34 @@
     },
   ];
 
+  // Anciens murs « carrelage » (avant la création des sols) : toujours affichés, mais absents de la palette
+  const legacy = [
+    { key: 'carrelage', name: 'Carrelage (ancien mur)', def: pat('carrelage', 5, 5, L(0, 0, 5, 0, 0.8) + L(0, 0, 0, 5, 0.8)) },
+  ];
+
+  // Sols : surfaces dessinées sous les murs (colonne « Plan » : carrelage de sol ; les autres sols sont courants)
+  const floorGroups = [
+    {
+      name: 'Sols',
+      items: [
+        { key: 'sol-uni', name: 'Sol uni (gris clair)', special: 'uni' },
+        { key: 'sol-carrelage', name: 'Carrelage de sol', def: pat('sol-carrelage', 10, 10, L(0, 0, 10, 0, 0.8) + L(0, 0, 0, 10, 0.8)) },
+        { key: 'sol-carrelageDiag', name: 'Carrelage en diagonale', def: pat('sol-carrelageDiag', 10, 10, L(0, 0, 10, 0, 0.8) + L(0, 0, 0, 10, 0.8), { rot: 45 }) },
+        {
+          key: 'sol-parquet', name: 'Parquet (lames)',
+          def: pat('sol-parquet', 40, 16, L(0, 0, 40, 0, 0.9) + L(0, 8, 40, 8, 0.9) + L(0, 16, 40, 16, 0.9) + L(0, 0, 0, 8, 0.9) + L(20, 8, 20, 16, 0.9)),
+        },
+        { key: 'sol-dalle', name: 'Dalle béton', def: pat('sol-dalle', 12, 12, D(2, 3, 0.6) + D(8, 2, 0.5) + D(6, 8, 0.6) + D(10, 10, 0.5) + D(3, 10, 0.5)) },
+      ],
+    },
+  ];
+  const FLOOR_UNI = '#e9ecf1';
+
   const map = {};
   for (const g of groups) for (const it of g.items) map[it.key] = it;
+  for (const it of legacy) map[it.key] = it;
+  const floorMap = {};
+  for (const g of floorGroups) for (const it of g.items) floorMap[it.key] = it;
 
   // Remplissage SVG d'un matériau (null = « verre », dessiné en trait)
   function fill(key) {
@@ -108,9 +133,18 @@
     return `url(#m-${m.key})`;
   }
 
+  // Remplissage SVG d'un sol
+  function floorFill(key) {
+    const f = floorMap[key] || floorMap['sol-uni'];
+    return f.special === 'uni' ? FLOOR_UNI : `url(#m-${f.key})`;
+  }
+
   window.SchMaterials = {
     groups,
     map,
+    floorGroups,
+    floorMap,
+    floorFill,
     WALL_COLOR,
     INK,
     fill,
@@ -118,10 +152,17 @@
     defsSVG() {
       let s = '';
       for (const g of groups) for (const it of g.items) if (it.def) s += it.def;
+      for (const it of legacy) s += it.def;
+      for (const g of floorGroups) for (const it of g.items) if (it.def) s += it.def;
       return s;
     },
     // Petite vignette pour la palette
     swatch(key) {
+      const fl = floorMap[key];
+      if (fl) {
+        return `<svg viewBox="0 0 64 24" width="64" height="24" aria-hidden="true"><rect x="2" y="3" width="60" height="18" fill="#fff"/>` +
+          `<rect x="2" y="3" width="60" height="18" fill="${floorFill(key)}" stroke="#8a93a3" stroke-width="1.2"/></svg>`;
+      }
       const m = map[key] || map.plein;
       let inner;
       if (m.special === 'verre') inner = `<line x1="4" y1="12" x2="60" y2="12" stroke="${INK}" stroke-width="1.8"/>`;

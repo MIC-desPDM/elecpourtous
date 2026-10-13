@@ -102,6 +102,9 @@
     snap: true,
     mat: 'plein',          // matériau des prochains murs
     th: 12,                // épaisseur des prochains murs
+    floorMat: 'sol-carrelage',   // matériau des prochains sols
+    fdraft: null,          // sol en cours de tracé (liste de points)
+    space: false,          // touche Espace enfoncée : glisser = déplacer la vue
     draft: null,
     cursor: null,
     drag: null,
@@ -288,10 +291,30 @@
     return `<text font-size="${t.size}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="600" fill="#222">${tsp}</text>`;
   }
 
+  // Sols : surfaces (polygones) dessinées sous les murs
+  function floorSVG(f) {
+    const pts = f.pts.map((q) => q[0] + ',' + q[1]).join(' ');
+    return `<polygon points="${pts}" fill="#fff"/><polygon points="${pts}" fill="${MAT.floorFill(f.mat)}" stroke="#8a93a3" stroke-width="1"/>`;
+  }
+  function inPoly(p, pts) {
+    let inside = false;
+    for (let i = 0, k = pts.length - 1; i < pts.length; k = i++) {
+      const [xi, yi] = pts[i], [xk, yk] = pts[k];
+      if ((yi > p.y) !== (yk > p.y) && p.x < ((xk - xi) * (p.y - yi)) / (yk - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function floorHandleAt(f, p) {
+    const r = 12 / S.view.k;
+    for (let i = 0; i < f.pts.length; i++) if (Math.hypot(p.x - f.pts[i][0], p.y - f.pts[i][1]) <= r) return i;
+    return -1;
+  }
+
   function sceneSVG(list) {
-    let walls = '', open = '', links = '', syms = '', texts = '', wallsFill = '';
+    let floors = '', walls = '', open = '', links = '', syms = '', texts = '', wallsFill = '';
     for (const it of list) {
-      if (it.t === 'door' || it.t === 'window') open += openingSVG(it);
+      if (it.t === 'floor') floors += floorSVG(it);
+      else if (it.t === 'door' || it.t === 'window') open += openingSVG(it);
       else if (it.t === 'link') links += linkSVG(list, it);
       else if (it.t === 'sym') syms += symSVG(it);
       else if (it.t === 'text') texts += textSVG(it);
@@ -299,7 +322,7 @@
     // Les murs épais sont dessinés en dernier : une cloison fine s'arrête proprement contre un mur épais
     const wl = list.filter((i) => i.t === 'wall').sort((a, b) => (a.th || WALL_TH) - (b.th || WALL_TH));
     for (const w of wl) { walls += wallOutlineSVG(w); wallsFill += wallFillSVG(w); }
-    return walls + wallsFill + open + links + syms + texts;
+    return floors + walls + wallsFill + open + links + syms + texts;
   }
 
   function selSVG(it, multi) {
@@ -312,6 +335,10 @@
     if (it.t === 'link') {
       const a = resolveEnd(items(), it.a), b = resolveEnd(items(), it.b);
       return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${SEL}" stroke-opacity="0.5" stroke-width="5" stroke-linecap="round"/>`;
+    }
+    if (it.t === 'floor') {
+      const pts = it.pts.map((q) => q[0] + ',' + q[1]).join(' ');
+      return `<polygon points="${pts}" ${dash}/>` + it.pts.map((q) => handle(q[0], q[1])).join('');
     }
     if (it.t === 'text') {
       const [x0, y0, x1, y1] = textBox(it);
@@ -363,6 +390,16 @@
       const q = c ? snapPt(c, GRID) : S.draft;
       o += `<line x1="${S.draft.x}" y1="${S.draft.y}" x2="${q.x}" y2="${q.y}" stroke="${SEL}" stroke-opacity="0.6" stroke-width="${S.th}" stroke-linecap="square"/>`;
       o += `<circle cx="${S.draft.x}" cy="${S.draft.y}" r="${5 / k}" fill="${SEL}"/>`;
+    }
+    if (S.tool === 'floor' && S.fdraft && c) {
+      const q = snapPt(c, GRID), a = S.fdraft[0];
+      if (S.drag && S.drag.mode === 'floor' && S.drag.fresh && S.drag.moved) {
+        o += `<rect x="${Math.min(a.x, q.x)}" y="${Math.min(a.y, q.y)}" width="${Math.abs(q.x - a.x)}" height="${Math.abs(q.y - a.y)}" fill="${SEL}" fill-opacity="0.12" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
+      } else {
+        const pts = [...S.fdraft, q].map((r) => r.x + ',' + r.y).join(' ');
+        o += `<polygon points="${pts}" fill="${SEL}" fill-opacity="0.1" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
+        for (const r of S.fdraft) o += `<circle cx="${r.x}" cy="${r.y}" r="${4 / S.view.k}" fill="${SEL}"/>`;
+      }
     }
     if (S.drag && S.drag.mode === 'room' && c) {
       const a = S.drag.a, q = snapPt(c, GRID);
@@ -468,6 +505,10 @@
       if (it.t !== 'wall') continue;
       if (distSeg(p, it.x1, it.y1, it.x2, it.y2).d <= (it.th || WALL_TH) / 2 + tol) return it;
     }
+    for (let i = list.length - 1; i >= 0; i--) {
+      const it = list[i];
+      if (it.t === 'floor' && inPoly(p, it.pts)) return it;
+    }
     return null;
   }
 
@@ -509,6 +550,10 @@
       const [a, b, c, d] = SYM.map[it.key].b;
       const m = Math.max(Math.abs(a), Math.abs(b), Math.abs(c), Math.abs(d)) * (it.s || 1);
       return [it.x - m, it.y - m, it.x + m, it.y + m];
+    }
+    if (it.t === 'floor') {
+      const xs = it.pts.map((q) => q[0]), ys = it.pts.map((q) => q[1]);
+      return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
     }
     if (it.t === 'text') return textBox(it);
     if (it.t === 'door' || it.t === 'window') {
@@ -557,8 +602,9 @@
 
   /* ---------- Outils ---------- */
   const HINTS = {
-    select: 'Sélection : cliquez un élément pour le déplacer ; Maj+clic en ajoute ou en retire ; Maj+glisser sur le fond trace un rectangle de sélection ; glisser le fond pour vous déplacer ; molette ou pincement pour zoomer.',
+    select: 'Sélection : cliquez un élément pour le déplacer ; Maj+clic en ajoute ou en retire ; Maj+glisser sur le fond trace un rectangle de sélection ; glisser le fond (ou Espace+glisser) pour vous déplacer ; molette ou pincement pour zoomer.',
     multi: 'Sélection multiple : touchez les éléments pour les ajouter ou les retirer ; glissez sur le fond pour tracer un rectangle (tout ce qui est entièrement dedans est sélectionné). Déplacement de la vue : deux doigts, clic droit ou molette.',
+    floor: 'Sol : faites glisser d’un angle à l’angle opposé (rectangle), ou cliquez les sommets d’une forme libre ; fermez avec un clic sur le premier point, un double-clic ou Entrée. Matériau : palette « Sols ». Le sol se dessine sous les murs.',
     wall: 'Mur : cliquez pour poser le point de départ, puis cliquez à chaque angle. Double-clic ou Échap pour terminer. Matériau : palette ; épaisseur : barre « Murs ».',
     room: 'Pièce : faites glisser d’un angle à l’angle opposé pour créer les 4 murs.',
     door: 'Porte : cliquez sur un mur pour la poser (elle s’aligne sur le mur). Les boutons « Miroir » changent le sens d’ouverture.',
@@ -573,6 +619,7 @@
     S.tool = tool;
     S.placeKey = tool === 'place' ? key : null;
     S.draft = null;
+    S.fdraft = null;
     S.drag = null;
     if (tool !== 'select') { /* on garde la sélection pour les boutons d'action */ }
     renderOverlay();
@@ -586,6 +633,14 @@
     S.sel = it.id;
     renderOverlay();
     updateUI();
+  }
+  function addFloor(pts) {
+    mutate(() => items().push({ id: uid(), t: 'floor', pts: pts.map((q) => [q.x, q.y]), mat: S.floorMat }));
+  }
+  function closeFloor() {
+    if (S.fdraft && S.fdraft.length >= 3) addFloor(S.fdraft);
+    S.fdraft = null;
+    renderOverlay();
   }
   function addWall(a, b) {
     mutate(() => items().push({ id: uid(), t: 'wall', x1: a.x, y1: a.y, x2: b.x, y2: b.y, mat: S.mat, th: S.th }));
@@ -622,7 +677,7 @@
     const p = toWorld(e);
     S.cursor = p;
 
-    if (e.button === 1 || e.button === 2) {
+    if (e.button === 1 || e.button === 2 || S.space) {
       S.drag = { mode: 'pan', cx: e.clientX, cy: e.clientY, vx: S.view.x, vy: S.view.y };
       return;
     }
@@ -635,6 +690,10 @@
         if (one && one.t === 'wall') {
           const h = wallHandleAt(one, p);
           if (h) { S.drag = { mode: 'wallEnd', id: one.id, h, before: snapJSON() }; return; }
+        }
+        if (one && one.t === 'floor') {
+          const vi = floorHandleAt(one, p);
+          if (vi >= 0) { S.drag = { mode: 'floorVertex', id: one.id, i: vi, before: snapJSON() }; return; }
         }
         const hit = hitItem(p);
         const here = { cx: e.clientX, cy: e.clientY, moved: false };
@@ -666,6 +725,13 @@
         const q = snapPt(p, GRID);
         if (!S.draft) { S.draft = { x: q.x, y: q.y }; S.drag = { mode: 'wall', fresh: true, cx: e.clientX, cy: e.clientY }; }
         else { S.drag = { mode: 'wall', fresh: false, cx: e.clientX, cy: e.clientY }; }
+        renderOverlay();
+        break;
+      }
+      case 'floor': {
+        const q = snapPt(p, GRID);
+        if (!S.fdraft) { S.fdraft = [{ x: q.x, y: q.y }]; S.drag = { mode: 'floor', fresh: true, cx: e.clientX, cy: e.clientY, moved: false }; }
+        else { S.drag = { mode: 'floor', fresh: false, cx: e.clientX, cy: e.clientY, moved: false }; }
         renderOverlay();
         break;
       }
@@ -737,13 +803,14 @@
     }
     if (d.mode === 'gmove') {
       if (!d.moved) return;
-      const hasWall = d.ids.some((id) => d.origs[id].t === 'wall');
+      const hasWall = d.ids.some((id) => d.origs[id].t === 'wall' || d.origs[id].t === 'floor');
       const step = hasWall ? GRID : STEP;
       const dx = snapOn(p.x - d.p0.x, step), dy = snapOn(p.y - d.p0.y, step);
       for (const id of d.ids) {
         const it = findItem(id), o = d.origs[id];
         if (!it || it.t === 'link') continue;
         if (it.t === 'wall') { it.x1 = o.x1 + dx; it.y1 = o.y1 + dy; it.x2 = o.x2 + dx; it.y2 = o.y2 + dy; }
+        else if (it.t === 'floor') it.pts = o.pts.map(([x, y]) => [x + dx, y + dy]);
         else { it.x = o.x + dx; it.y = o.y + dy; }
       }
       sceneG.innerHTML = sceneSVG(items());
@@ -758,6 +825,9 @@
       if (it.t === 'wall') {
         const ex = snapOn(o.x1 + dx, GRID) - o.x1, ey = snapOn(o.y1 + dy, GRID) - o.y1;
         it.x1 = o.x1 + ex; it.y1 = o.y1 + ey; it.x2 = o.x2 + ex; it.y2 = o.y2 + ey;
+      } else if (it.t === 'floor') {
+        const ex = snapOn(o.pts[0][0] + dx, GRID) - o.pts[0][0], ey = snapOn(o.pts[0][1] + dy, GRID) - o.pts[0][1];
+        it.pts = o.pts.map(([x, y]) => [x + ex, y + ey]);
       } else if (it.t === 'sym' || it.t === 'text') {
         it.x = snapOn(o.x + dx, STEP); it.y = snapOn(o.y + dy, STEP);
       } else if (it.t === 'door' || it.t === 'window') {
@@ -787,6 +857,15 @@
       renderOverlay();
       return;
     }
+    if (d.mode === 'floorVertex') {
+      const f = findItem(d.id);
+      if (!f) return;
+      const q = snapPt(p, GRID);
+      f.pts[d.i] = [q.x, q.y];
+      sceneG.innerHTML = sceneSVG(items());
+      renderOverlay();
+      return;
+    }
     if (d.mode === 'wallEnd') {
       const w = findItem(d.id);
       if (!w) return;
@@ -812,7 +891,7 @@
 
     if (d.mode === 'pan') { rememberView(); return; }
     if (d.mode === 'bgMove' || d.mode === 'bgScale') { save(); renderOverlay(); return; }
-    if (d.mode === 'move' || d.mode === 'gmove' || d.mode === 'wallEnd') {
+    if (d.mode === 'move' || d.mode === 'gmove' || d.mode === 'wallEnd' || d.mode === 'floorVertex') {
       const now = snapJSON();
       if (now !== d.before) { pushUndo(d.before); save(); }
       if (!d.moved && d.click === 'toggle') S.sels = S.sels.filter((id) => id !== d.hitId);
@@ -844,6 +923,22 @@
       } else {
         addWall(S.draft, q);
         S.draft = { x: q.x, y: q.y };
+      }
+      renderOverlay();
+      return;
+    }
+    if (d.mode === 'floor') {
+      const q = snapPt(p, GRID);
+      if (d.fresh) {
+        if (d.moved) {                       // glisser = rectangle
+          const a = S.fdraft[0];
+          if (Math.abs(q.x - a.x) >= GRID && Math.abs(q.y - a.y) >= GRID) addFloor([{ x: a.x, y: a.y }, { x: q.x, y: a.y }, { x: q.x, y: q.y }, { x: a.x, y: q.y }]);
+          S.fdraft = null;
+        }                                    // sinon : clic = premier sommet d'une forme libre
+      } else {
+        const pts = S.fdraft, first = pts[0], last = pts[pts.length - 1];
+        if (q.x === first.x && q.y === first.y && pts.length >= 3) { addFloor(pts); S.fdraft = null; }
+        else if (q.x !== last.x || q.y !== last.y) pts.push({ x: q.x, y: q.y });
       }
       renderOverlay();
       return;
@@ -882,7 +977,7 @@
   function onCancel(e) {
     S.pointers.delete(e.pointerId);
     if (S.pointers.size < 2) S.gesture = null;
-    if (S.drag && (S.drag.mode === 'move' || S.drag.mode === 'gmove' || S.drag.mode === 'wallEnd')) setItems(JSON.parse(S.drag.before));
+    if (S.drag && (S.drag.mode === 'move' || S.drag.mode === 'gmove' || S.drag.mode === 'wallEnd' || S.drag.mode === 'floorVertex')) setItems(JSON.parse(S.drag.before));
     S.drag = null;
     renderOverlay();
   }
@@ -900,6 +995,7 @@
   }, { passive: false });
   svg.addEventListener('dblclick', (e) => {
     if (S.tool === 'wall') { S.draft = null; renderOverlay(); return; }
+    if (S.tool === 'floor') { closeFloor(); return; }
     if (S.tool === 'select') {
       const hit = hitItem(toWorld(e));
       if (hit && hit.t === 'text') editText(hit.id);
@@ -910,7 +1006,8 @@
   const sel = () => (S.sel ? findItem(S.sel) : null);
 
   function rotateSel(dir) {
-    if (S.sels.length > 1) { rotateGroup(dir); return; }
+    const one = sel();
+    if (S.sels.length > 1 || (one && one.t === 'floor')) { rotateGroup(dir); return; }
     const it = sel();
     if (!it || !['sym', 'door', 'window'].includes(it.t)) return;
     mutate(() => { it.rot = ((it.rot || 0) + 90 * dir + 360) % 360; });
@@ -927,7 +1024,8 @@
     if (axis === 'h') it.mx = !it.mx; else it.my = !it.my;
   }
   function mirrorSel(axis) {
-    if (S.sels.length > 1) { mirrorGroup(axis); return; }
+    const one = sel();
+    if (S.sels.length > 1 || (one && one.t === 'floor')) { mirrorGroup(axis); return; }
     const it = sel();
     if (!it || (it.t !== 'sym' && it.t !== 'door')) return;
     mutate(() => {
@@ -968,6 +1066,7 @@
     const add = (x, y) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
     for (const it of list) {
       if (it.t === 'wall') { add(it.x1, it.y1); add(it.x2, it.y2); }
+      else if (it.t === 'floor') { for (const q of it.pts) add(q[0], q[1]); }
       else if (it.t === 'door' || it.t === 'window') { const c = openingCenter(it); add(c.x, c.y); }
       else add(it.x, it.y);
     }
@@ -984,7 +1083,7 @@
   function rememberCenter(list) { if (gcMemo) gcMemo.e = exactCenter(list); }
   function rotateGroup(dir) {
     const list = selItems().filter((i) => i.t !== 'link');
-    if (list.length < 2) return;
+    if (list.length < 1) return;
     const c = groupCenter(list);
     const rp = (x, y) => ({ x: rnd(c.x - (y - c.y) * dir), y: rnd(c.y + (x - c.x) * dir) });
     mutate(() => {
@@ -992,6 +1091,8 @@
         if (it.t === 'wall') {
           const a = rp(it.x1, it.y1), b = rp(it.x2, it.y2);
           it.x1 = a.x; it.y1 = a.y; it.x2 = b.x; it.y2 = b.y;
+        } else if (it.t === 'floor') {
+          it.pts = it.pts.map(([x, y]) => { const q = rp(x, y); return [q.x, q.y]; });
         } else if (it.t === 'sym' || it.t === 'text') {
           const q = rp(it.x, it.y);
           it.x = q.x; it.y = q.y;
@@ -1009,13 +1110,15 @@
   }
   function mirrorGroup(axis) {
     const list = selItems().filter((i) => i.t !== 'link');
-    if (list.length < 2) return;
+    if (list.length < 1) return;
     const c = groupCenter(list);
     const rx = (x) => rnd(2 * c.x - x), ry = (y) => rnd(2 * c.y - y);
     mutate(() => {
       for (const it of list) {
         if (it.t === 'wall') {
           if (axis === 'h') { it.x1 = rx(it.x1); it.x2 = rx(it.x2); } else { it.y1 = ry(it.y1); it.y2 = ry(it.y2); }
+        } else if (it.t === 'floor') {
+          it.pts = it.pts.map(([x, y]) => (axis === 'h' ? [rx(x), y] : [x, ry(y)]));
         } else if (it.t === 'text') {
           if (axis === 'h') it.x = rx(it.x); else it.y = ry(it.y);   // le texte reste lisible : seule sa position change
         } else if (it.t === 'sym') {
@@ -1049,6 +1152,7 @@
       c.id = uid();
       map[it.id] = c.id;
       if (it.t === 'wall') { c.x1 += GRID; c.y1 += GRID; c.x2 += GRID; c.y2 += GRID; }
+      else if (it.t === 'floor') c.pts = c.pts.map(([x, y]) => [x + GRID, y + GRID]);
       else { c.x += GRID; c.y += GRID; }
       copies.push(c);
     }
@@ -1078,6 +1182,7 @@
     mutate(() => {
       for (const it of list) {
         if (it.t === 'wall') { it.x1 += dx; it.x2 += dx; it.y1 += dy; it.y2 += dy; }
+        else if (it.t === 'floor') it.pts = it.pts.map(([x, y]) => [x + dx, y + dy]);
         else { it.x += dx; it.y += dy; }
       }
     });
@@ -1110,6 +1215,13 @@
     if (ws.length) mutate(() => { for (const w of ws) w.mat = key; });
     else updateUI();
   }
+  function setFloorMaterial(key) {
+    if (!MAT.floorMap[key]) return;
+    const fs = selItems().filter((i) => i.t === 'floor');
+    S.floorMat = key;
+    if (fs.length) mutate(() => { for (const f of fs) f.mat = key; });
+    else updateUI();
+  }
   function changeThickness(dir) {
     const ws = selWalls();
     const nt = clampTh((ws.length ? (ws[0].th || WALL_TH) : S.th) + 2 * dir);
@@ -1137,6 +1249,15 @@
       }
       h += '</div>';
     }
+    h += '<h3 class="sch-group sch-group-main" style="margin-top:18px">Sols</h3>' +
+      '<p class="sch-note">Outil « Sol » : un sol est une surface dessinée sous les murs. Cliquez un matériau pour l’appliquer au sol sélectionné et aux prochains sols.</p>';
+    for (const g of MAT.floorGroups) {
+      h += '<div class="sch-mats">';
+      for (const it of g.items) {
+        h += `<button type="button" class="sch-mat sch-flr" data-floor="${it.key}" title="${esc(it.name)}" aria-label="${esc(it.name)}">${MAT.swatch(it.key)}<span>${esc(it.name)}</span></button>`;
+      }
+      h += '</div>';
+    }
     h += '<h3 class="sch-group sch-group-main" style="margin-top:18px">Symboles électriques</h3>';
     for (const g of SYM.groups) {
       h += `<h3 class="sch-group">${esc(g.name)}</h3><div class="sch-syms">`;
@@ -1158,8 +1279,8 @@
     const movable = list.filter((i) => i.t !== 'link');
     const t = list.length === 1 ? list[0].t : null;
     const en = (id, ok) => { const b = $(id); if (b) b.disabled = !ok; };
-    const canRot = movable.length > 1 || ['sym', 'door', 'window'].includes(t);
-    const canMirror = movable.length > 1 || t === 'sym' || t === 'door';
+    const canRot = movable.length > 1 || ['sym', 'door', 'window', 'floor'].includes(t);
+    const canMirror = movable.length > 1 || t === 'sym' || t === 'door' || t === 'floor';
     const canSize = list.some((i) => ['sym', 'door', 'window', 'text'].includes(i.t));
     en('#sch-rot-l', canRot);
     en('#sch-rot-r', canRot);
@@ -1179,7 +1300,11 @@
     const sameMat = ws.length && ws.every((w) => (w.mat || 'plein') === (ws[0].mat || 'plein'));
     const sameTh = ws.length && ws.every((w) => (w.th || WALL_TH) === (ws[0].th || WALL_TH));
     const curMat = ws.length ? (sameMat ? (ws[0].mat || 'plein') : null) : S.mat;
-    root.querySelectorAll('.sch-mat').forEach((b) => b.classList.toggle('is-active', b.dataset.mat === curMat));
+    root.querySelectorAll('.sch-mat[data-mat]').forEach((b) => b.classList.toggle('is-active', b.dataset.mat === curMat));
+    const fl = selItems().filter((i) => i.t === 'floor');
+    const sameFl = fl.length && fl.every((f) => f.mat === fl[0].mat);
+    const curFl = fl.length ? (sameFl ? fl[0].mat : null) : S.floorMat;
+    root.querySelectorAll('.sch-flr').forEach((b) => b.classList.toggle('is-active', b.dataset.floor === curFl));
     $('#sch-th-val').textContent = ws.length ? (sameTh ? String(ws[0].th || WALL_TH) : '—') : String(S.th);
     en('#sch-mat-all', items().some((i) => i.t === 'wall'));
     const sch = schema();
@@ -1325,6 +1450,12 @@
       case 'door': case 'window':
         if (![it.x, it.y, it.len].every(num)) return null;
         return { id, t: it.t, x: it.x, y: it.y, rot: num(it.rot) ? it.rot : 0, len: Math.max(20, Math.min(200, it.len)), ...(num(it.th) ? { th: clampTh(it.th) } : {}), ...(it.t === 'door' ? { ...(it.mx ? { mx: true } : {}), ...(it.my || it.flip ? { my: true } : {}) } : {}) };
+      case 'floor': {
+        if (!Array.isArray(it.pts) || it.pts.length < 3 || it.pts.length > 200) return null;
+        const pts = it.pts.map((q) => (Array.isArray(q) && q.length === 2 && num(q[0]) && num(q[1]) ? [q[0], q[1]] : null));
+        if (pts.some((q) => !q)) return null;
+        return { id, t: 'floor', pts, mat: typeof it.mat === 'string' && MAT.floorMap[it.mat] ? it.mat : 'sol-uni' };
+      }
       case 'sym':
         if (!SYM.map[it.key] || ![it.x, it.y].every(num)) return null;
         return { id, t: 'sym', key: it.key, x: it.x, y: it.y, rot: num(it.rot) ? it.rot : 0, s: num(it.s) ? Math.max(0.4, Math.min(3, it.s)) : 1, ...(it.mx ? { mx: true } : {}), ...(it.my ? { my: true } : {}) };
@@ -1372,6 +1503,8 @@
     bound = true;
     $('#sch-palette').innerHTML = paletteHTML();
     $('#sch-palette').addEventListener('click', (e) => {
+      const fb = e.target.closest('.sch-flr');
+      if (fb) { setFloorMaterial(fb.dataset.floor); return; }
       const m = e.target.closest('.sch-mat');
       if (m) { setMaterial(m.dataset.mat); return; }
       const b = e.target.closest('.sch-sym');
@@ -1464,6 +1597,7 @@
     });
 
     document.addEventListener('keydown', onKey);
+    document.addEventListener('keyup', (e) => { if (e.key === ' ') S.space = false; });
   }
 
   function onKey(e) {
@@ -1472,6 +1606,8 @@
     if (/INPUT|SELECT|TEXTAREA/.test(tag)) return;
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key;
+    if (key === ' ' && !/BUTTON/.test(tag)) { S.space = true; e.preventDefault(); return; }
+    if (key === 'Enter' && S.tool === 'floor' && S.fdraft) { e.preventDefault(); closeFloor(); return; }
     if (mod && key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && key.toLowerCase() === 'y') { e.preventDefault(); doRedo(); return; }
     if (mod && key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel(); return; }
