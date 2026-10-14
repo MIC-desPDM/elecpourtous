@@ -197,8 +197,6 @@
 
   <!-- ===== Section : Désignation MELEC (repérage des matériels) ===== -->
   <main id="main-designation" class="designation-main" data-view="designation" hidden>
-    <p class="des-soon" role="status"><strong>À venir</strong> — cette partie sera complétée prochainement.</p>
-
     <header class="des-head">
       <h2>Désignation des matériels électriques</h2>
       <p class="des-intro">Un repère se lit en trois parties : <strong>la première lettre</strong> (famille d’élément), <strong>la deuxième lettre</strong> (fonction) et <strong>un numéro</strong> choisi par l’utilisateur.</p>
@@ -212,8 +210,9 @@
       <h3 id="des-search-title" class="sr-only">Rechercher une désignation</h3>
       <div class="search-wrap des-search-wrap">
         <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
-        <input type="search" id="des-search" placeholder="Rechercher un matériel : disjoncteur, voyant, moteur…" aria-label="Rechercher la désignation d’un matériel électrique" autocomplete="off">
+        <input type="search" id="des-search" placeholder="Ex. : contacteur - moteur - 2" aria-label="Construire un repère : matériel - fonction - numéro, séparés par des tirets" autocomplete="off">
       </div>
+      <p class="des-help">Écrivez les parties du repère séparées par un tiret « - » : <strong class="des-c1">matériel</strong> - <strong class="des-c2">fonction</strong> - <strong class="des-c3">numéro</strong>. Exemple : <code>contacteur - moteur - 2</code> donne <strong>KM2</strong>.</p>
       <div id="des-results" class="des-results" aria-live="polite"></div>
     </section>
 

@@ -1539,23 +1539,29 @@ if ('serviceWorker' in navigator) {
 })();
 
 
-/* ---------- Désignation MELEC : recherche d'un matériel par mots-clés ---------- */
+/* ---------- Désignation MELEC : construction d'un repère par mots-clés ----------
+   Saisie : « matériel - fonction - numéro » (groupes séparés par « - »).
+   1er groupe -> 1re lettre (familles et matériels du tableau ①), 2e groupe -> 2e lettre (fonctions du tableau ②),
+   3e groupe -> numéro. Quand plusieurs lettres conviennent, la meilleure est retenue et les autres sont proposées. */
 (function () {
   const input = document.getElementById('des-search');
   const out = document.getElementById('des-results');
   if (!input || !out) return;
   const norm = (t) => String(t).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[’']/g, ' ');
-  const escH = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escH = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const tables = document.querySelectorAll('#main-designation .des-table');
-  // Index : familles (1re lettre) avec leurs matériels, fonctions (2e lettre)
   const fams = [...tables[0].tBodies[0].rows].map((r) => ({
     letter: r.cells[0].textContent.trim(),
-    family: r.cells[1].textContent.trim(),
+    name: r.cells[1].textContent.trim(),
     items: r.cells[2].textContent.split(/[,.]\s*/).map((x) => x.trim()).filter((x) => x && !/^aucun exemple/i.test(x)),
   }));
-  const funcs = tables[1] ? [...tables[1].tBodies[0].rows].map((r) => ({ letter: r.cells[0].textContent.trim(), name: r.cells[1].textContent.trim() })) : [];
+  // Mots supplémentaires reconnus pour la 2e lettre
+  const ALIAS2 = { M: ['moteur'] };
+  const funcs = tables[1] ? [...tables[1].tBodies[0].rows].map((r) => {
+    const letter = r.cells[0].textContent.trim();
+    return { letter, name: r.cells[1].textContent.trim(), alias: ALIAS2[letter] || [] };
+  }) : [];
 
-  // Surligne les mots recherchés (sans tenir compte des accents ni des majuscules)
   function mark(text, words) {
     const n = norm(text);
     const hits = new Array(text.length).fill(false);
@@ -1568,35 +1574,99 @@ if ('serviceWorker' in navigator) {
     return o + (on ? '</mark>' : '');
   }
   const has = (text, words) => { const n = norm(text); return words.every((w) => n.includes(w)); };
+  // Mot entier (meilleur score qu'un morceau de mot)
+  const whole = (text, words) => { const n = ' ' + norm(text).replace(/[^a-z0-9]+/g, ' ') + ' '; return words.every((w) => n.includes(' ' + w + ' ') || n.includes(' ' + w + 's ')); };
+  const wordsOf = (g) => norm(g).split(/\s+/).filter(Boolean);
 
-  function search() {
-    const words = norm(input.value).split(/\s+/).filter((w) => w.length > 0);
-    if (!words.length) { out.innerHTML = ''; return; }
+  // Candidats pour la 1re lettre, du meilleur au moins bon
+  function rankFams(words) {
     const res = [];
     for (const f of fams) {
       const items = f.items.filter((it) => has(it, words));
-      const famHit = has(f.family, words);
-      if (items.length || famHit) res.push({ f, items, famHit });
+      const famHit = has(f.name, words);
+      if (!items.length && !famHit) continue;
+      const score = (famHit ? 3 : 0) + (whole(f.name, words) ? 2 : 0) + (items.length ? 2 : 0) + (items.some((it) => whole(it, words)) ? 1 : 0);
+      res.push({ letter: f.letter, label: f.name, items, score, f });
     }
-    // les matériels trouvés par leur nom passent en premier
-    res.sort((a, b) => (b.items.length ? 1 : 0) - (a.items.length ? 1 : 0));
-    const fn = funcs.filter((x) => has(x.name, words));
-    if (!res.length && !fn.length) {
-      out.innerHTML = '<p class="des-noresult">Aucun matériel ne correspond. Essayez un autre mot (ex. : contacteur, fusible, bouton, lampe…).</p>';
-      return;
+    return res.sort((a, b) => b.score - a.score);
+  }
+  function rankFuncs(words) {
+    const res = [];
+    for (const x of funcs) {
+      const aliasHit = x.alias.some((a) => words.every((w) => a.includes(w)));
+      if (!has(x.name, words) && !aliasHit) continue;
+      const score = (aliasHit ? 3 : 0) + (whole(x.name, words) ? 2 : 1);
+      const extra = aliasHit ? ' (' + x.alias.join(', ') + ')' : '';
+      res.push({ letter: x.letter, label: x.name + extra, score });
     }
-    let h = '';
-    for (const r of res) {
-      const list = (r.items.length ? r.items : r.f.items).map((it) => `<li>${mark(it, words)}</li>`).join('');
-      h += `<article class="des-hit"><span class="des-hit-letter">${escH(r.f.letter)}</span><div>` +
-        `<p class="des-hit-family">${mark(r.f.family, words)}</p>` +
-        (list ? `<ul class="des-hit-items">${list}</ul>` : '') + '</div></article>';
+    return res.sort((a, b) => b.score - a.score);
+  }
+
+  const picks = {};        // choix faits parmi les autres lettres possibles, par groupe
+  function search() {
+    const raw = input.value;
+    if (!raw.trim()) { out.innerHTML = ''; return; }
+    const groups = raw.split('-').map((g) => g.trim());
+    const parts = [];
+    let code = '';
+    groups.slice(0, 3).forEach((g, i) => {
+      if (!g) return;
+      const cls = 'des-c' + (i + 1);
+      if (i === 2) {                                      // numéro
+        const ok = /^\d+$/.test(g);
+        parts.push({ cls, letter: ok ? g : '?', label: ok ? 'numéro choisi par l’utilisateur' : 'le numéro doit être un nombre (ex. : 1, 2, 3…)', bad: !ok, q: g });
+        code += `<span class="${ok ? cls : 'des-miss'}">${escH(ok ? g : '?')}</span>`;
+        return;
+      }
+      const words = wordsOf(g);
+      const cands = i === 0 ? rankFams(words) : rankFuncs(words);
+      if (!cands.length) {
+        parts.push({ cls, letter: '?', label: `aucune lettre ne correspond à « ${g} »`, bad: true, q: g });
+        code += '<span class="des-miss">?</span>';
+        return;
+      }
+      const key = i + ':' + norm(g);
+      const chosen = cands.find((c) => c.letter === picks[key]) || cands[0];
+      const others = cands.filter((c) => c !== chosen);
+      let label = mark(chosen.label, words);
+      if (i === 0 && chosen.items.length) label += ` <span class="des-part-q">— ${chosen.items.map((it) => mark(it, words)).join(', ')}</span>`;
+      parts.push({ cls, letter: chosen.letter, html: label, q: g, others, key });
+      code += `<span class="${cls}">${escH(chosen.letter)}</span>`;
+    });
+    if (groups.length > 3) parts.push({ cls: '', letter: '!', label: 'un repère n’a que trois parties : seules les trois premières sont prises en compte', bad: true });
+
+    let h = `<div class="des-build"><div class="des-build-code" aria-label="Repère obtenu">${code || '—'}</div><ul class="des-parts">`;
+    for (const p of parts) {
+      h += `<li class="des-part${p.bad ? ' is-bad' : ''}"><span class="des-part-l ${p.bad ? '' : p.cls}">${escH(p.letter)}</span>` +
+        `<span>${p.html || escH(p.label)}</span>`;
+      if (p.others && p.others.length) {
+        h += '<span class="des-alts">Autres lettres possibles : ' +
+          p.others.slice(0, 6).map((c) => `<button type="button" class="des-alt" data-key="${escH(p.key)}" data-letter="${escH(c.letter)}"><b>${escH(c.letter)}</b> ${escH(c.label)}</button>`).join('') + '</span>';
+      }
+      h += '</li>';
     }
-    if (fn.length) {
-      h += '<p class="des-hit-sub">Deuxième lettre (fonction)</p>';
-      for (const x of fn) h += `<article class="des-hit des-hit-2"><span class="des-hit-letter">${escH(x.letter)}</span><div><p class="des-hit-family">${mark(x.name, words)}</p></div></article>`;
+    h += '</ul></div>';
+
+    // Un seul groupe : on garde aussi la liste détaillée des familles trouvées
+    if (groups.length === 1) {
+      const words = wordsOf(groups[0]);
+      const res = rankFams(words);
+      if (res.length > 1) {
+        h += '<p class="des-count">Familles trouvées</p>';
+        for (const r of res) {
+          const list = (r.items.length ? r.items : r.f.items).map((it) => `<li>${mark(it, words)}</li>`).join('');
+          h += `<article class="des-hit"><span class="des-hit-letter">${escH(r.letter)}</span><div><p class="des-hit-family">${mark(r.label, words)}</p>` +
+            (list ? `<ul class="des-hit-items">${list}</ul>` : '') + '</div></article>';
+        }
+      }
     }
-    out.innerHTML = `<p class="des-count">${res.length + fn.length} résultat${res.length + fn.length > 1 ? 's' : ''}</p>` + h;
+    out.innerHTML = h;
   }
   input.addEventListener('input', search);
+  out.addEventListener('click', (e) => {
+    const b = e.target.closest('.des-alt');
+    if (!b) return;
+    picks[b.dataset.key] = b.dataset.letter;
+    search();
+  });
 })();
