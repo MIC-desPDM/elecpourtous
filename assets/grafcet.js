@@ -126,7 +126,29 @@
     const col = (tb) => (tb ? [...tb.tBodies[0].rows].map((r) => r.cells[0].textContent.trim()) : []);
     return { first: new Set(col(t[0])), second: new Set(col(t[1])) };
   }
-  // Renvoie null si la désignation est correcte, sinon la raison affichée par le panneau « ! »
+  // Vérification d'un texte selon le point de vue ; renvoie null si tout va bien, sinon la raison du panneau « ! »
+  //  - Système / Opérative : une action, un évènement
+  //  - Commande : une désignation connue (KM1, S1…)
+  //  - Automate : une sortie %Q2.x pour une action, une entrée %I1.x pour une réceptivité
+  function textIssue(text, kind, view) {
+    const t = String(text || '').trim();
+    const isAct = kind === 'act';
+    if (view === 'commande') return designationIssue(t);
+    if (view === 'automate') return automateIssue(t, isAct);
+    if (!t) return isAct ? 'Action manquante' : 'Évènement manquant';
+    return null;
+  }
+  function automateIssue(t, isAct) {
+    if (!t) return isAct ? 'Sortie manquante' : 'Entrée manquante';
+    // adresse écrite sans « % » devant (ex. Q2.1, I1.0)
+    if (/(^|[^%A-Za-z0-9])[QqIi]\d+(\.\d+)?\b/.test(t)) return 'Faute d’écriture';
+    const addr = t.match(/%[A-Za-z]*[0-9.]*/g) || [];
+    if (!addr.length) return 'Faute d’écriture';
+    const ok = isAct ? /^%Q2\.\d+$/ : /^%I1\.\d+$/;
+    if (addr.some((a) => !ok.test(a))) return 'Faute d’écriture';
+    return null;
+  }
+  // Point de vue Commande : désignation présente et connue du tableau Désignation MELEC
   function designationIssue(text) {
     const t = String(text || '').trim();
     if (!t) return 'Attribution manquante';
@@ -147,6 +169,11 @@
   const snapV = (v) => (S.snap ? Math.round(v / GRID) * GRID : rnd(v));
   const actsOf = (stepId) => items().filter((i) => i.t === 'act' && i.step === stepId).sort((a, b) => a.ord - b.ord);
   const textW = (t, size) => String(t).length * size * 0.58;
+  const PLACEHOLDER = {
+    systeme: ['action', 'évènement'], operative: ['action', 'évènement'],
+    commande: ['désignation', 'désignation'], automate: ['sortie %Q2.x', 'entrée %I1.x'],
+  };
+  const ph = (kind, view) => PLACEHOLDER[view || S.view][kind === 'act' ? 0 : 1];
 
   // Boîtes des actions d'une étape (en ligne, à droite de l'étape)
   function actBoxes(st, view, withRef) {
@@ -155,7 +182,7 @@
     const h = withRef ? ACT_H + 14 : ACT_H;
     for (const a of actsOf(st.id)) {
       const main = txt(a.id, view), ref = withRef ? txt(a.id, S.ref) : '';
-      const w = Math.max(70, textW(main || 'action', 12) + 20, withRef ? textW(ref, 11) + 20 : 0);
+      const w = Math.max(70, textW(main || ph('act', view), 12) + 20, withRef ? textW(ref, 11) + 20 : 0);
       out.push({ a, x, y: st.y - h / 2, w, h, main, ref });
       x += w;
     }
@@ -248,7 +275,7 @@
         s += `<rect x="${rnd(b.x)}" y="${rnd(b.y)}" width="${rnd(b.w)}" height="${b.h}" fill="#fff" stroke="${INK}" stroke-width="1.6"/>`;
         const ty = withRef ? b.y + 18 : st.y + 4.5;
         if (b.main) s += `<text x="${rnd(b.x + b.w / 2)}" y="${rnd(ty)}" font-size="12" text-anchor="middle" font-family="${FONT}" fill="${INK}">${esc(b.main)}</text>`;
-        else if (!o.export && !withRef) s += `<text x="${rnd(b.x + b.w / 2)}" y="${rnd(ty)}" font-size="11" font-style="italic" text-anchor="middle" font-family="${FONT}" fill="#9aa1ac">action</text>`;
+        else if (!o.export && !withRef) s += `<text x="${rnd(b.x + b.w / 2)}" y="${rnd(ty)}" font-size="11" font-style="italic" text-anchor="middle" font-family="${FONT}" fill="#9aa1ac">${esc(ph('act', view))}</text>`;
         if (withRef && b.ref) s += `<text x="${rnd(b.x + b.w / 2)}" y="${rnd(b.y + b.h - 8)}" font-size="11" font-style="italic" text-anchor="middle" font-family="${FONT}" fill="#5a6b86" opacity="${S.refOp}">${esc(b.ref)}</text>`;
       }
     }
@@ -257,7 +284,7 @@
       s += `<line x1="${tr.x - TR_W}" y1="${tr.y}" x2="${tr.x + TR_W}" y2="${tr.y}" stroke="${INK}" stroke-width="3"/>`;
       const main = txt(tr.id, view), ref = withRef ? txt(tr.id, S.ref) : '';
       if (main) s += `<text x="${tr.x + TR_W + 8}" y="${tr.y + 4.5}" font-size="12" font-family="${FONT}" fill="${INK}">${esc(main)}</text>`;
-      else if (!o.export) s += `<text x="${tr.x + TR_W + 8}" y="${tr.y + 4.5}" font-size="11" font-style="italic" font-family="${FONT}" fill="#9aa1ac">réceptivité</text>`;
+      else if (!o.export) s += `<text x="${tr.x + TR_W + 8}" y="${tr.y + 4.5}" font-size="11" font-style="italic" font-family="${FONT}" fill="#9aa1ac">${esc(ph('trans', view))}</text>`;
       if (ref) s += `<text x="${tr.x + TR_W + 8}" y="${tr.y + 18}" font-size="11" font-style="italic" font-family="${FONT}" fill="#5a6b86" opacity="${S.refOp}">${esc(ref)}</text>`;
     }
     return s;
@@ -268,10 +295,10 @@
     const out = [];
     const withRef = S.ref && S.ref !== S.view;
     for (const st of items().filter((i) => i.t === 'step')) {
-      for (const b of actBoxes(st, S.view, withRef)) out.push({ id: b.a.id, x: b.x + b.w - 2, y: b.y + 2 });
+      for (const b of actBoxes(st, S.view, withRef)) out.push({ id: b.a.id, kind: 'act', x: b.x + b.w - 2, y: b.y + 2 });
     }
     for (const tr of items().filter((i) => i.t === 'trans')) {
-      out.push({ id: tr.id, x: tr.x + TR_W + 10 + textW(txt(tr.id) || 'réceptivité', 12) + 8, y: tr.y - 6 });
+      out.push({ id: tr.id, kind: 'trans', x: tr.x + TR_W + 10 + textW(txt(tr.id) || ph('trans'), 12) + 8, y: tr.y - 6 });
     }
     return out;
   }
@@ -298,10 +325,10 @@
       const a = find(d.a);
       if (a) o += `<line x1="${a.x}" y1="${a.y}" x2="${d.cur.x}" y2="${d.cur.y}" stroke="${SEL}" stroke-width="2" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
     }
-    // panneaux « ! » du point de vue Commande
-    if (S.view === 'commande') {
+    // panneaux « ! » : texte manquant ou mal écrit pour le point de vue affiché
+    {
       for (const t of textTargets()) {
-        const why = designationIssue(txt(t.id));
+        const why = textIssue(txt(t.id), t.kind, S.view);
         if (!why) continue;
         const sc = 1 / Math.max(0.6, k);
         o += `<g class="gf-warn" data-warn="${esc(t.id)}" transform="translate(${rnd(t.x)} ${rnd(t.y)}) scale(${rnd(sc)})"><title>${esc(why)}</title>` +
@@ -340,7 +367,7 @@
     }
     for (const st of list.filter((i) => i.t === 'step')) if (Math.abs(p.x - st.x) <= STEP_H + tol && Math.abs(p.y - st.y) <= STEP_H + tol) return st;
     for (const tr of list.filter((i) => i.t === 'trans')) {
-      const w = textW(txt(tr.id) || 'réceptivité', 12);
+      const w = textW(txt(tr.id) || ph('trans'), 12);
       if (Math.abs(p.y - tr.y) <= 8 + tol && p.x >= tr.x - TR_W - tol && p.x <= tr.x + TR_W + 10 + w) return tr;
     }
     for (const id of Object.keys(S.paths)) {
@@ -348,6 +375,23 @@
       for (let i = 0; i < pts.length - 1; i++) if (distSeg(p, pts[i], pts[i + 1]) <= 4 + tol) return find(id);
     }
     return null;
+  }
+
+  function nodeAt(p) {
+    const tol = 12 / S.cam.k;
+    let best = null, bd = Infinity;
+    for (const it of items()) {
+      if (it.t === 'step') {
+        const dx = Math.max(0, Math.abs(p.x - it.x) - STEP_H), dy = Math.max(0, Math.abs(p.y - it.y) - STEP_H), d = Math.hypot(dx, dy);
+        if (d <= tol && d < bd) { best = it; bd = d; }
+      } else if (it.t === 'trans') {
+        const dx = Math.max(0, Math.abs(p.x - it.x) - TR_W), dy = Math.abs(p.y - it.y), d = Math.hypot(dx, dy);
+        if (d <= tol + 4 && d < bd) { best = it; bd = d; }
+      }
+    }
+    if (best) return best;
+    const h = hit(p);
+    return h && h.t === 'act' ? find(h.step) : null;
   }
 
   /* ---------- Vue : zoom et ajustement ---------- */
@@ -370,7 +414,7 @@
         add(it.x - STEP_H - 70, it.y - STEP_H - 14); add(it.x + STEP_H, it.y + STEP_H + 14);
         for (const b of actBoxes(it, S.view, withRef)) add(b.x + b.w, b.y + b.h);
       } else if (it.t === 'trans') {
-        add(it.x - TR_W - 70, it.y - 10); add(it.x + TR_W + 10 + textW(txt(it.id) || 'réceptivité', 12), it.y + 20);
+        add(it.x - TR_W - 70, it.y - 10); add(it.x + TR_W + 10 + textW(txt(it.id) || ph('trans'), 12), it.y + 20);
       }
     }
     return x0 === Infinity ? null : { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
@@ -393,6 +437,37 @@
     return m + 1;
   }
   const linkExists = (a, b) => items().some((l) => l.t === 'link' && l.a === a && l.b === b);
+  const outCount = (id) => items().filter((l) => l.t === 'link' && l.a === id).length;
+  const inCount = (id) => items().filter((l) => l.t === 'link' && l.b === id).length;
+  // Trait bien vertical : l'élément du dessous se cale sous celui du dessus (sauf divergence / convergence)
+  function alignBelow(a, b) {
+    if (b.y > a.y && outCount(a.id) <= 1 && inCount(b.id) <= 1) {
+      const dx = a.x - b.x;
+      b.x = a.x;
+      return dx;
+    }
+    return 0;
+  }
+  // Relie a -> b ; deux étapes (ou deux transitions) reçoivent automatiquement l'élément intermédiaire
+  function connect(a, b) {
+    if (!a || !b || a.id === b.id) return false;
+    if (a.t === b.t) {
+      const down = b.y > a.y;
+      const mid = down
+        ? { x: a.x, y: snapV((a.y + b.y) / 2) }
+        : { x: a.x, y: snapV(a.y + STEP_H + 30) };
+      const m = a.t === 'step' ? { id: uid(), t: 'trans', x: mid.x, y: mid.y } : { id: uid(), t: 'step', x: mid.x, y: mid.y, n: nextStepNumber() };
+      items().push(m);
+      items().push({ id: uid(), t: 'link', a: a.id, b: m.id });
+      items().push({ id: uid(), t: 'link', a: m.id, b: b.id });
+      alignBelow(m, b);
+      return true;
+    }
+    if (linkExists(a.id, b.id)) return false;
+    items().push({ id: uid(), t: 'link', a: a.id, b: b.id });
+    alignBelow(a, b);
+    return true;
+  }
   function validPair(a, b) {
     return a && b && a.id !== b.id && ((a.t === 'step' && b.t === 'trans') || (a.t === 'trans' && b.t === 'step'));
   }
@@ -409,7 +484,7 @@
       }
       items().push(it);
       // enchaînement automatique : l'élément sélectionné juste au-dessus est relié au nouveau
-      if (prev && validPair(prev, it) && prev.y < it.y && !linkExists(prev.id, it.id)) items().push({ id: uid(), t: 'link', a: prev.id, b: it.id });
+      if (prev && validPair(prev, it) && prev.y < it.y && !linkExists(prev.id, it.id)) connect(prev, it);
     });
     S.sel = it.id;
     renderOverlay(); updateUI();
@@ -431,8 +506,8 @@
       return isAct ? `${name} — désignation de l’action (repère du préactionneur, ex. KM1) :`
         : `${name} — réceptivité avec la désignation des capteurs (ex. S1, S1.S2, ↑S3) :`;
     }
-    if (S.view === 'automate') return isAct ? `${name} — action (adresse de sortie, ex. %Q0.1) :` : `${name} — réceptivité (adresse d’entrée, ex. %I0.1) :`;
-    return isAct ? `${name} — action de l’étape :` : `${name} — réceptivité de la transition :`;
+    if (S.view === 'automate') return isAct ? `${name} — sortie (forme %Q2.x, ex. %Q2.0) :` : `${name} — entrée (forme %I1.x, ex. %I1.0 ; plusieurs : %I1.0 . %I1.2) :`;
+    return isAct ? `${name} — action :` : `${name} — évènement :`;
   }
   function editText(id, fresh) {
     const it = find(id || S.sel);
@@ -517,10 +592,12 @@
         if (st) addAction(st); else hint('Action : touchez une étape pour lui ajouter une action.');
         break;
       }
-      case 'link':
-        if (h && (h.t === 'step' || h.t === 'trans')) { S.drag = { mode: 'link', a: h.id, cur: p }; renderOverlay(); }
+      case 'link': {
+        const n = nodeAt(p);
+        if (n) { S.drag = { mode: 'link', a: n.id, cur: p }; renderOverlay(); }
         else pan();
         break;
+      }
     }
   }
   function onMove(e) {
@@ -561,9 +638,13 @@
       return;
     }
     if (d.mode === 'link') {
-      const a = find(d.a), b = hit(toWorld(e));
-      if (validPair(a, b) && !linkExists(a.id, b.id)) mutate(() => items().push({ id: uid(), t: 'link', a: a.id, b: b.id }));
-      else if (b && b.id !== a.id) hint('Une liaison relie une étape à une transition, ou une transition à une étape.');
+      const a = find(d.a), b = nodeAt(toWorld(e));
+      if (a && b && b.id !== a.id) {
+        let made = false;
+        mutate(() => { made = connect(a, b); });
+        if (made && a.t === b.t) hint(a.t === 'step' ? 'Une transition a été ajoutée entre les deux étapes : double appui dessus pour écrire sa réceptivité.' : 'Une étape a été ajoutée entre les deux transitions.');
+        else if (!made) hint('Ces deux éléments sont déjà reliés.');
+      }
       renderOverlay();
     }
   }
@@ -586,7 +667,7 @@
   // le panneau « ! » touché affiche sa raison dans la ligne d'aide
   svg.addEventListener('click', (e) => {
     const w = e.target.closest && e.target.closest('[data-warn]');
-    if (w) hint('⚠ ' + designationIssue(txt(w.dataset.warn)) + ' — touchez deux fois l’élément pour saisir sa désignation.');
+    if (w) { const it = find(w.dataset.warn); if (it) hint('⚠ ' + textIssue(txt(it.id), it.t, S.view) + ' — touchez deux fois l’élément pour corriger son texte.'); }
   });
 
   /* ---------- Clavier ---------- */
@@ -635,9 +716,9 @@
     $('#gf-copy').disabled = !S.ref || S.ref === S.view;
     $('#gf-snap').checked = S.snap;
     let h = HINTS[S.tool] || '';
-    if (S.view === 'commande') {
-      const n = textTargets().filter((t) => designationIssue(txt(t.id))).length;
-      if (n) h = `⚠ ${n} élément${n > 1 ? 's' : ''} sans désignation correcte (panneau « ! »). ` + h;
+    {
+      const n = textTargets().filter((t) => textIssue(txt(t.id), t.kind, S.view)).length;
+      if (n) h = `⚠ ${n} élément${n > 1 ? 's' : ''} à compléter ou à corriger (panneau « ! »). ` + h;
     }
     if (S.ref === S.view) h = 'Le calque choisi est le point de vue affiché : choisissez-en un autre pour le voir en transparence. ' + h;
     $('#gf-hint').textContent = h;
@@ -725,5 +806,5 @@
   S.needFit = true;
   updateUI();
 
-  window.GrafcetEditor = { clean, _state: S, _G: () => G(), _issue: designationIssue, _render: render };
+  window.GrafcetEditor = { clean, _state: S, _G: () => G(), _issue: designationIssue, _textIssue: textIssue, _render: render };
 })();
