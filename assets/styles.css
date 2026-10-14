@@ -855,3 +855,11 @@ dialog h2 {
   .sch-subtabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border-radius: var(--radius-md); }
   .sch-subtab { padding: 8px 6px; font-size: 0.8125rem; white-space: normal; line-height: 1.25; border-radius: var(--radius-sm); }
 }
+.uni-sec {
+  width: 5.5em; padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); font: inherit; font-weight: 600; text-align: center;
+}
+.uni-sec.is-bad { border-color: var(--danger); box-shadow: 0 0 0 2px var(--danger-soft); }
+.uni-check { cursor: pointer; }
+.uni-check input { accent-color: var(--accent); width: 16px; height: 16px; }

@@ -3,6 +3,7 @@
    Chaque symbole est dessiné dans un repère local centré sur (0,0).
    - b : boîte englobante [x0, y0, x1, y1] (sélection / détection du clic)
    - draw(c) : renvoie le SVG du symbole ; c.rot = rotation courante
+   - c : centre de l'appareil [x, y] quand il n'est pas en (0,0) (raccordement des traits unifilaires)
    Pour ajuster un symbole, modifier uniquement sa fonction draw ci-dessous.
    ============================================================ */
 (function () {
@@ -52,7 +53,7 @@
       items: [
         { key: 'prise', name: 'Prise simple', b: [-16, -16, 16, 16], draw: prise('') },
         {
-          key: 'prise2', name: 'Prise double', b: [-27, -14, 16, 12],
+          key: 'prise2', name: 'Prise double', b: [-27, -14, 16, 12], c: [4, -2],
           draw: (c) => label(c, 'x2', -17, 8, 9, 'middle', false) + circ(11, 4, -2) + dots3(4, -1.5, 0.78),
         },
         { key: 'priseET', name: 'Prise étanche', b: [-16, -16, 28, 24], draw: prise('ET') },
@@ -72,14 +73,14 @@
     {
       name: 'Interrupteurs et commandes',
       items: [
-        { key: 'inter1', name: 'Interrupteur simple allumage', b: [-11, -13, 16, 14], draw: () => circ(9, 0, 3) + tickR },
-        { key: 'inter2', name: 'Interrupteur double allumage', b: [-16, -13, 16, 14], draw: () => circ(9, 0, 3) + tickR + tickL },
+        { key: 'inter1', name: 'Interrupteur simple allumage', b: [-11, -13, 16, 14], c: [0, 3], draw: () => circ(9, 0, 3) + tickR },
+        { key: 'inter2', name: 'Interrupteur double allumage', b: [-16, -13, 16, 14], c: [0, 3], draw: () => circ(9, 0, 3) + tickR + tickL },
         {
-          key: 'interVV', name: 'Interrupteur va-et-vient', b: [-11, -13, 16, 14],
+          key: 'interVV', name: 'Interrupteur va-et-vient', b: [-11, -13, 16, 14], c: [0, 3],
           draw: () => circ(9, 0, 3) + line(-8.5, 11.5, 14, -11) + line(8, -11, 14, -5),
         },
-        { key: 'inter1V', name: 'Interrupteur simple allumage avec voyant', b: [-11, -13, 16, 14], draw: () => circ(9, 0, 3) + crossSw + tickR },
-        { key: 'inter2V', name: 'Interrupteur double allumage avec voyant', b: [-16, -13, 16, 14], draw: () => circ(9, 0, 3) + crossSw + tickR + tickL },
+        { key: 'inter1V', name: 'Interrupteur simple allumage avec voyant', b: [-11, -13, 16, 14], c: [0, 3], draw: () => circ(9, 0, 3) + crossSw + tickR },
+        { key: 'inter2V', name: 'Interrupteur double allumage avec voyant', b: [-16, -13, 16, 14], c: [0, 3], draw: () => circ(9, 0, 3) + crossSw + tickR + tickL },
         { key: 'bp', name: 'Bouton poussoir', b: [-16, -16, 16, 16], draw: () => circ(14) + circ(9) },
         { key: 'bpV', name: 'Bouton poussoir avec voyant', b: [-16, -16, 16, 16], draw: () => circ(14) + circ(9) + crossBp },
       ],

@@ -97,6 +97,7 @@
   function save() {
     const s = schema();
     if (s) s.updated = Date.now();
+    if (S.readonly && typeof uniRetag === 'function') uniRetag();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveNow, 250);
   }
@@ -130,7 +131,16 @@
     linkW: LINK_W,         // épaisseur des prochaines liaisons
     linkT: 0,              // transparence des prochaines liaisons (0 = opaque, 0.9 = presque invisible)
     lockMarks: true,       // affichage des cadenas des éléments figés
+    uw: 2,                 // épaisseur des prochains traits unifilaires
+    usec: null,            // section (mm²) des prochains traits
+    showSec: true,         // affichage des sections
+    showMarks: true,       // affichage des marques de conducteurs
   };
+  try {
+    const dsp = JSON.parse(window.localStorage.getItem('ef_uni_disp') || '{}');
+    if (dsp.sec === false) S.showSec = false;
+    if (dsp.marks === false) S.showMarks = false;
+  } catch (e) { /* ignoré */ }
   try { if (window.localStorage.getItem('ef_sch_locks') === '0') S.lockMarks = false; } catch (e) { /* ignoré */ }
   function resetHist() {
     S.hist = { implantation: { undo: [], redo: [] }, unifilaire: { undo: [], redo: [] } };
@@ -478,7 +488,7 @@
     const dash = `fill="none" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"`;
     const handle = (x, y) => (multi || it.locked) ? '' : `<circle cx="${x}" cy="${y}" r="${7 / S.view.k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
     if (it.t === 'uline') {
-      return `<line x1="${it.x1}" y1="${it.y1}" x2="${it.x2}" y2="${it.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="10" stroke-linecap="round"/>` +
+      return `<line x1="${it.x1}" y1="${it.y1}" x2="${it.x2}" y2="${it.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="${(it.w || 2) + 8}" stroke-linecap="round"/>` +
         handle(it.x1, it.y1) + handle(it.x2, it.y2);
     }
     if (it.t === 'wall') {
@@ -550,10 +560,19 @@
     const b = itemBounds(it);
     return b ? Math.max(b[2] - b[0], b[3] - b[1]) : 30;
   }
-  // Le cadenas mesure le tiers de l'objet figé : il grandit et rétrécit avec le zoom comme l'objet
+  // Largeur visible de l'objet (épaisseur d'un mur, d'un trait, d'une liaison ; petit côté d'un objet)
+  function itemWidth(it) {
+    if (it.t === 'wall') return it.th || WALL_TH;
+    if (it.t === 'uline') return Math.max(it.w || 2, S.showMarks && uniMarkList(it.m || {}).length ? UNI_HALF * 2 : 0);
+    if (it.t === 'link') return it.w || LINK_W;
+    const b = itemBounds(it);
+    return b ? Math.min(b[2] - b[0], b[3] - b[1]) : 20;
+  }
+  // Le cadenas mesure le tiers de l'objet figé, sans dépasser sa largeur visible ; il suit le zoom comme l'objet
   function lockSVG(it) {
     const p = lockPos(it);
-    const sc = Math.max(1, itemSize(it)) / 3 / 20;      // dessin du cadenas : 20 unités de diamètre
+    const size = Math.max(0.5, Math.min(itemSize(it) / 3, itemWidth(it)));
+    const sc = size / 20;                                // dessin du cadenas : 20 unités de diamètre
     return `<g class="sch-lockmark" transform="translate(${rnd(p.x)} ${rnd(p.y)}) scale(${rnd(sc * 1000) / 1000})">` +
       `<circle r="10" fill="#fff" fill-opacity="0.92" stroke="${LOCK_RED}" stroke-width="1.2"/>` +
       `<path d="M-3.6 -0.5 V-3.4 a3.6 3.6 0 0 1 7.2 0 V-0.5" fill="none" stroke="${LOCK_RED}" stroke-width="1.9" stroke-linecap="round"/>` +
@@ -740,7 +759,7 @@
     }
     for (let i = list.length - 1; i >= 0; i--) {
       const it = list[i];
-      if (it.t === 'uline' && distSeg(p, it.x1, it.y1, it.x2, it.y2).d <= 3 + tol) return it;
+      if (it.t === 'uline' && distSeg(p, it.x1, it.y1, it.x2, it.y2).d <= Math.max(3, (it.w || 2) / 2 + 1) + tol) return it;
     }
     for (let i = list.length - 1; i >= 0; i--) {
       const it = list[i];
@@ -1799,6 +1818,7 @@
     db.current = id;
     S.sel = null; S.draft = null; S.drag = null;
     resetHist();
+    if (S.readonly) uniSync();
     const s = schema();
     if (s && s.view && !keepView) S.view = { ...s.view };
     else fitView();
@@ -1931,7 +1951,10 @@
           ...(num(it.bd) && it.bd >= 0 ? { bd: Math.round(it.bd) } : {}) };
       case 'uline':
         if (![it.x1, it.y1, it.x2, it.y2].every(num)) return null;
-        return { id, t: 'uline', x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2, m: uniCleanMarks(it.m) };
+        return { id, t: 'uline', x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2, m: uniCleanMarks(it.m),
+          ...(num(it.w) ? { w: Math.max(0.5, Math.min(12, it.w)) } : {}),
+          ...(num(it.sec) && it.sec > 0 ? { sec: it.sec } : {}),
+          ...(typeof it.s1 === 'string' ? { s1: it.s1 } : {}), ...(typeof it.s2 === 'string' ? { s2: it.s2 } : {}) };
       case 'floor': {
         if (!Array.isArray(it.pts) || it.pts.length < 3 || it.pts.length > 200) return null;
         const pts = it.pts.map((q) => (Array.isArray(q) && q.length === 2 && num(q[0]) && num(q[1]) ? [q[0], q[1]] : null));
@@ -1989,6 +2012,8 @@
     bound = true;
     $('#sch-palette').innerHTML = paletteHTML();
     $('#sch-palette').addEventListener('click', (e) => {
+      if (e.target.closest('#uni-w-m')) { uniChangeWidth(-1); return; }
+      if (e.target.closest('#uni-w-p')) { uniChangeWidth(1); return; }
       const inc = e.target.closest('[data-uni-inc]');
       if (inc) { uniChange(inc.dataset.uniInc, 1); return; }
       const dec = e.target.closest('[data-uni-dec]');
@@ -2003,9 +2028,12 @@
     $('#sch-palette').addEventListener('change', (e) => {
       const inp = e.target.closest('[data-uni-val]');
       if (inp) uniSetCount(inp.dataset.uniVal, inp.value);
+      if (e.target.id === 'uni-sec') uniSetSection(e.target.value);
+      if (e.target.id === 'uni-show-sec') uniSetDisplay('sec', e.target.checked);
+      if (e.target.id === 'uni-show-marks') uniSetDisplay('marks', e.target.checked);
     });
     $('#sch-palette').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.target.closest('[data-uni-val]')) e.target.blur();
+      if (e.key === 'Enter' && (e.target.closest('[data-uni-val]') || e.target.id === 'uni-sec')) e.target.blur();
     });
     $('#sch-lw-m').addEventListener('click', () => changeLinkWidth(-1));
     $('#sch-lw-p').addEventListener('click', () => changeLinkWidth(1));
@@ -2153,6 +2181,7 @@
       S.drag = null; S.draft = null; S.fdraft = null; S.space = false; S.sels = []; gcMemo = null;
       const allowed = ro ? UNI_TOOLS : IMPL_TOOLS;
       if (!allowed.includes(S.tool)) { S.tool = 'select'; S.placeKey = null; }
+      if (ro && ready) uniSync();
       const pal = $('#sch-palette'); if (pal) pal.scrollTop = 0;   // la palette change de contenu : retour en haut
       if (ready) { render(); updateUI(); }
     }
@@ -2226,15 +2255,35 @@
     }
     return o;
   }
+  // Section en mm² : nombre entier ou à virgule (« 1,5 » ou « 1.5 »)
+  function parseSection(v) {
+    const t = String(v == null ? '' : v).trim().replace(/\s*mm²?$/i, '').replace(',', '.');
+    if (!t) return null;
+    if (!/^\d+(\.\d+)?$/.test(t)) return NaN;
+    const n = Number(t);
+    return n > 0 ? n : NaN;
+  }
+  const fmtSection = (n) => String(n).replace('.', ',');
   function ulineSVG(l) {
-    let o = `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="#000" stroke-width="2" stroke-linecap="round"/>`;
+    const w = l.w || 2;
+    let o = `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="#000" stroke-width="${w}" stroke-linecap="round"/>`;
     const dx = l.x2 - l.x1, dy = l.y2 - l.y1, L = Math.hypot(dx, dy);
-    const marks = uniMarkList(l.m || {});
-    if (L < 1 || !marks.length) return o;
+    if (L < 1) return o;
     const ux = dx / L, uy = dy / L;
-    const sx = ux < 0 || (ux === 0 && uy < 0) ? -1 : 1;   // marques rangées de gauche à droite
     const d = uniSlashDir(ux, uy);
     const mx = (l.x1 + l.x2) / 2, my = (l.y1 + l.y2) / 2;
+    // section : écrite à côté du trait, du côté opposé aux marques
+    if (S.showSec && typeof l.sec === 'number') {
+      let nx = -uy, ny = ux;
+      if (nx * d.x + ny * d.y > 0) { nx = -nx; ny = -ny; }
+      const off = w / 2 + 9;
+      const tx = mx + nx * off, ty = my + ny * off;
+      const anchor = Math.abs(nx) < 0.35 ? 'middle' : nx > 0 ? 'start' : 'end';
+      o += `<text x="${rnd(tx)}" y="${rnd(ty + 3.5 + ny * 3)}" font-size="10" font-weight="600" text-anchor="${anchor}" font-family="Arial, Helvetica, sans-serif" fill="#111">${fmtSection(l.sec)} mm²</text>`;
+    }
+    const marks = S.showMarks ? uniMarkList(l.m || {}) : [];
+    if (!marks.length) return o;
+    const sx = ux < 0 || (ux === 0 && uy < 0) ? -1 : 1;   // marques rangées de gauche à droite
     // positions le long du trait : un chiffre élargit l'écart avec la marque suivante
     const pos = [];
     let acc = 0;
@@ -2250,30 +2299,60 @@
     return o;
   }
   function addULine(a, b) {
-    a = symEdge(a, b);                         // départ posé au centre d'un symbole : ramené sur son bord, face au trait
-    const it = { id: uid(), t: 'uline', x1: a.x, y1: a.y, x2: b.x, y2: b.y, m: clone(S.umark) };
+    const it = { id: uid(), t: 'uline', x1: a.x, y1: a.y, x2: b.x, y2: b.y, m: clone(S.umark), ...(S.uw !== 2 ? { w: S.uw } : {}), ...(S.usec ? { sec: S.usec } : {}) };
     mutate(() => items().push(it));
   }
 
   /* ----- Aimantation des traits ----- */
-  // Points d'accroche, par priorité : extrémités des autres traits, symboles électriques du plan
-  // d'implantation (bord du symbole, face à l'autre extrémité), contour extérieur des boîtes de dérivation
-  // (milieu des côtés de préférence). Sinon, la grille magnétique s'applique.
+  // Points d'accroche, par priorité : extrémités des autres traits, centre des appareils (symboles électriques
+  // du plan d'implantation), contour extérieur des boîtes de dérivation (milieu des côtés de préférence).
+  // Sinon, la grille magnétique s'applique. Un trait accroché à un appareil le suit s'il est déplacé en implantation.
   function symRadius(sy) {
     const d = SYM.map[sy.key];
     if (!d) return 10;
     const [x0, y0, x1, y1] = d.b;
     return (Math.min(x1 - x0, y1 - y0) / 2) * (sy.s || 1);
   }
-  function symEdge(pt, other) {
-    if (!other) return pt;
-    for (const sy of implItems()) {
-      if (sy.t !== 'sym' || Math.abs(sy.x - pt.x) > 0.5 || Math.abs(sy.y - pt.y) > 0.5) continue;
-      const dx = other.x - sy.x, dy = other.y - sy.y, L = Math.hypot(dx, dy), r = symRadius(sy);
-      if (L <= r) return pt;
-      return { x: rnd(sy.x + (dx / L) * r), y: rnd(sy.y + (dy / L) * r) };
+  // Centre de l'appareil, en tenant compte de sa rotation, de sa taille et de ses miroirs
+  function symPoint(sy) {
+    const d = SYM.map[sy.key], c = (d && d.c) || [0, 0];
+    const k = sy.s || 1, lx = c[0] * k * (sy.mx ? -1 : 1), ly = c[1] * k * (sy.my ? -1 : 1);
+    const a = rad(sy.rot || 0);
+    return { x: rnd(sy.x + lx * Math.cos(a) - ly * Math.sin(a)), y: rnd(sy.y + lx * Math.sin(a) + ly * Math.cos(a)) };
+  }
+  const implSyms = () => implItems().filter((i) => i.t === 'sym' && SYM.map[i.key]);
+  // Après chaque modification en unifilaire : une extrémité posée au centre d'un appareil y est rattachée
+  function uniRetag() {
+    const syms = implSyms().map((sy) => ({ id: sy.id, p: symPoint(sy) }));
+    for (const l of uniItems()) {
+      if (l.t !== 'uline') continue;
+      for (const [k, x, y] of [['s1', l.x1, l.y1], ['s2', l.x2, l.y2]]) {
+        const hit = syms.find((q) => Math.abs(q.p.x - x) < 0.6 && Math.abs(q.p.y - y) < 0.6);
+        if (hit) l[k] = hit.id; else delete l[k];
+      }
     }
-    return pt;
+  }
+  // À l'ouverture de l'unifilaire : les extrémités rattachées suivent les appareils déplacés en implantation ;
+  // les anciens traits arrêtés au bord d'un appareil sont ramenés en son centre.
+  function uniSync() {
+    const syms = implSyms();
+    const byId = {};
+    for (const sy of syms) byId[sy.id] = sy;
+    for (const l of uniItems()) {
+      if (l.t !== 'uline') continue;
+      for (const [k, xk, yk] of [['s1', 'x1', 'y1'], ['s2', 'x2', 'y2']]) {
+        let sy = l[k] ? byId[l[k]] : null;
+        if (!sy) {
+          delete l[k];
+          sy = syms.find((q) => { const c = symPoint(q); return Math.hypot(l[xk] - c.x, l[yk] - c.y) <= symRadius(q) + 1; });
+        }
+        if (!sy) continue;
+        const c = symPoint(sy);
+        const o = xk === 'x1' ? { x: l.x2, y: l.y2 } : { x: l.x1, y: l.y1 };
+        if (c.x === o.x && c.y === o.y) continue;          // le trait ne doit pas se réduire à un point
+        l[xk] = c.x; l[yk] = c.y; l[k] = sy.id;
+      }
+    }
   }
   function uniSnap(p, other, skipId) {
     const R = 14 / S.view.k;
@@ -2286,13 +2365,12 @@
       take(l.x2, l.y2, Math.hypot(p.x - l.x2, p.y - l.y2), 'end');
     }
     if (best) return { ...best, hit: true };
-    // 2. symboles électriques de l'implantation
-    for (const sy of implItems()) {
-      if (sy.t !== 'sym') continue;
-      const r = symRadius(sy), d = Math.hypot(p.x - sy.x, p.y - sy.y);
-      if (d > r + R) continue;
-      const e = other ? symEdge({ x: sy.x, y: sy.y }, other) : { x: sy.x, y: sy.y };
-      if (!best || d < best.d) best = { x: e.x, y: e.y, d, kind: 'sym', cx: sy.x, cy: sy.y, r };
+    // 2. centre des appareils (symboles électriques de l'implantation)
+    for (const sy of implSyms()) {
+      const c = symPoint(sy), d = Math.hypot(p.x - c.x, p.y - c.y);
+      if (d > symRadius(sy) + R) continue;
+      if (other && c.x === other.x && c.y === other.y) continue;
+      if (!best || d < best.d) best = { x: c.x, y: c.y, d, kind: 'sym' };
     }
     if (best) return { ...best, hit: true };
     // 3. contour extérieur des boîtes de dérivation
@@ -2369,6 +2447,15 @@
   function uniPanelHTML() {
     let h = '<h3 class="sch-group sch-group-main">Marquage du trait</h3>' +
       '<p class="uni-target" id="uni-target"></p>' +
+      '<div class="uni-row"><span class="uni-name">Épaisseur du trait</span>' +
+      '<button type="button" class="btn btn-ghost btn-sm" id="uni-w-m" aria-label="Affiner le trait">−</button>' +
+      '<span class="sch-thval" id="uni-w-val">2</span>' +
+      '<button type="button" class="btn btn-ghost btn-sm" id="uni-w-p" aria-label="Épaissir le trait">+</button></div>' +
+      '<div class="uni-row"><label class="uni-name" for="uni-sec">Section (mm²)</label>' +
+      '<input type="text" class="uni-sec" id="uni-sec" inputmode="decimal" placeholder="ex. 1,5" autocomplete="off" aria-label="Section du conducteur en millimètres carrés"></div>' +
+      '<h4 class="sch-subgroup">Affichage</h4>' +
+      '<label class="uni-row uni-check"><input type="checkbox" id="uni-show-sec"> <span class="uni-name">Afficher les sections</span></label>' +
+      '<label class="uni-row uni-check"><input type="checkbox" id="uni-show-marks"> <span class="uni-name">Afficher les marques des conducteurs</span></label>' +
       '<p class="sch-note">Le nombre (sans limite) peut être tapé directement. Il est écrit à côté de la marque quand il dépasse 1 ; à 0, la marque disparaît.</p>' +
       '<h4 class="sch-subgroup">Neutre et terre</h4>' +
       uniRow('N', 'N', UNI_NEUTRE, 'Neutre') + uniRow('T', 'T', UNI_TERRE, 'Terre') +
@@ -2395,6 +2482,33 @@
   }
   function uniChange(key, delta) { uniApply(key, (n) => uniCount(n + delta)); }
   function uniSetCount(key, v) { const n = uniCount(v); uniApply(key, () => n); }
+  function uniChangeWidth(dir) {
+    const ls = selULines();
+    const nw = Math.max(0.5, Math.min(12, (ls.length ? (ls[0].w || 2) : S.uw) + 0.5 * dir));
+    S.uw = nw;
+    if (ls.length) mutate(() => { for (const l of ls) { if (nw === 2) delete l.w; else l.w = nw; } });
+    else updateUI();
+  }
+  function uniSetSection(v) {
+    const n = parseSection(v);
+    const si = $('#uni-sec');
+    if (Number.isNaN(n)) {                       // seul un nombre (entier ou à virgule) est accepté
+      si.classList.add('is-bad');
+      window.alert('Section : entrez seulement un nombre, entier ou à virgule (ex. 1,5 ou 2.5). Elle est comptée en mm².');
+      si.focus();
+      return;
+    }
+    si.classList.remove('is-bad');
+    S.usec = n;
+    const ls = selULines();
+    if (ls.length) mutate(() => { for (const l of ls) { if (n) l.sec = n; else delete l.sec; } });
+    else updateUI();
+  }
+  function uniSetDisplay(which, on) {
+    if (which === 'sec') S.showSec = on; else S.showMarks = on;
+    try { window.localStorage.setItem('ef_uni_disp', JSON.stringify({ sec: S.showSec, marks: S.showMarks })); } catch (e) { /* ignoré */ }
+    render(); updateUI();
+  }
   function uniUpdateUI() {
     const ls = selULines();
     const m = ls.length ? (ls[0].m || {}) : S.umark;
@@ -2405,6 +2519,13 @@
       row.classList.toggle('is-on', n > 0);
       row.querySelector('[data-uni-dec]').disabled = n <= 0;
     });
+    const w = ls.length ? (ls[0].w || 2) : S.uw;
+    $('#uni-w-val').textContent = String(w).replace('.', ',');
+    const sec = ls.length ? (typeof ls[0].sec === 'number' ? ls[0].sec : null) : S.usec;
+    const si = $('#uni-sec');
+    if (document.activeElement !== si) { si.value = sec ? fmtSection(sec) : ''; si.classList.remove('is-bad'); }
+    $('#uni-show-sec').checked = S.showSec;
+    $('#uni-show-marks').checked = S.showMarks;
     const tg = $('#uni-target');
     if (tg) tg.textContent = ls.length > 1 ? ls.length + ' traits sélectionnés' : ls.length ? 'Trait sélectionné' : 'Prochains traits';
   }
@@ -2420,6 +2541,7 @@
       bind();
       const s = schema();
       if (s && s.view) S.view = { ...s.view };
+      if (S.readonly) uniSync();
       refreshSelect();
       // l'ajustement a besoin des dimensions réelles : on attend l'affichage
       requestAnimationFrame(() => { if (!(s && s.view)) fitView(); render(); updateUI(); });
