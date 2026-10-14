@@ -6,6 +6,7 @@
      door   {x,y,rot,len,flip}     window {x,y,rot,len}
      sym    {key,x,y,rot,s}        text   {x,y,text,size}
      link   {a:{id?,x,y}, b:{id?,x,y}}
+   Schémas unifilaires (schema.uni) : traits {x1,y1,x2,y2,m:{c,N,T}}
    ============================================================ */
 (function () {
   'use strict';
@@ -114,6 +115,14 @@
     gesture: null,
     undo: [],
     redo: [],
+    // Schémas unifilaires (S.readonly = vrai : le plan d'implantation n'est plus modifiable)
+    readonly: false,
+    utool: 'select',       // 'select' | 'line'
+    usel: null,            // trait sélectionné
+    udraft: null,          // point de départ du trait en cours
+    umark: { c: { '#FF0000': 1 }, N: 1, T: 1 },   // marquage des prochains traits
+    uundo: [],
+    uredo: [],
   };
 
   // S.sel = identifiant de l'élément sélectionné quand il y en a exactement un (sinon null) ;
@@ -516,7 +525,7 @@
   }
 
   function overlaySVG() {
-    if (S.readonly) return '';
+    if (S.readonly) return uniOverlaySVG();
     let o = '';
     const selList = selItems();
     for (const it of selList) o += selSVG(it, selList.length > 1);
@@ -589,6 +598,7 @@
   const overG = svg.querySelector('#sch-overlay');
   const worldG = svg.querySelector('#sch-world');
   const bgG = svg.querySelector('#sch-bgl');
+  const uniG = svg.querySelector('#sch-uni');
 
   function applyView() {
     worldG.setAttribute('transform', `translate(${rnd(S.view.x)} ${rnd(S.view.y)}) scale(${S.view.k})`);
@@ -626,6 +636,7 @@
     applyView();
     renderBg();
     sceneG.innerHTML = sceneSVG(items());
+    uniG.innerHTML = S.readonly ? uniSceneSVG() : '';
     renderOverlay();
   }
 
@@ -755,7 +766,8 @@
   }
 
   function fullBBox() {
-    const bb = contentBBox(items());
+    let bb = contentBBox(items());
+    if (S.readonly) bb = mergeBox(bb, uniBBox());
     const cb = currentBg();
     if (!cb) return bb;
     const b = cb.b;
@@ -832,6 +844,7 @@
     const pts = [...S.pointers.values()];
     S.drag = null;
     S.draft = S.tool === 'wall' ? S.draft : null;
+    if (S.drag && S.drag.mode === 'uLine' && S.drag.fresh) S.udraft = null;
     S.gesture = {
       d: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1,
       cx: (pts[0].x + pts[1].x) / 2,
@@ -858,11 +871,12 @@
     const p = toWorld(e);
     S.cursor = p;
 
-    // Schémas unifilaires : plan en lecture seule, on peut seulement déplacer la vue
-    if (S.readonly || e.button === 1 || e.button === 2 || S.space) {
+    if (e.button === 1 || e.button === 2 || S.space) {
       S.drag = { mode: 'pan', cx: e.clientX, cy: e.clientY, vx: S.view.x, vy: S.view.y };
       return;
     }
+    // Schémas unifilaires : seuls les traits sont modifiables
+    if (S.readonly) { uniDown(e, p); return; }
 
     switch (S.tool) {
       case 'select': {
@@ -998,6 +1012,7 @@
       applyView();
       return;
     }
+    if (d.mode === 'uMove' || d.mode === 'uEnd') { uniMove(d, p); return; }
     if (d.mode === 'gmove') {
       if (!d.moved) return;
       if (d.allLocked) {                     // tout est figé : glisser déplace la vue
@@ -1131,6 +1146,7 @@
     S.cursor = p;
 
     if (d.mode === 'pan') { rememberView(); return; }
+    if (d.mode === 'uMove' || d.mode === 'uEnd' || d.mode === 'uLine') { uniUp(d, p, e); return; }
     if (d.mode === 'bgMove' || d.mode === 'bgScale') { save(); renderOverlay(); return; }
     if (d.mode === 'move' || d.mode === 'gmove' || d.mode === 'wallEnd' || d.mode === 'floorVertex' || d.mode === 'wallBend' || d.mode === 'shapeResize') {
       if (d.panned) rememberView();
@@ -1223,6 +1239,7 @@
   function onCancel(e) {
     S.pointers.delete(e.pointerId);
     if (S.pointers.size < 2) S.gesture = null;
+    if (S.drag && (S.drag.mode === 'uMove' || S.drag.mode === 'uEnd')) uniSet(JSON.parse(S.drag.before), false);
     if (S.drag && (S.drag.mode === 'move' || S.drag.mode === 'gmove' || S.drag.mode === 'wallEnd' || S.drag.mode === 'floorVertex' || S.drag.mode === 'wallBend' || S.drag.mode === 'shapeResize')) setItems(JSON.parse(S.drag.before));
     S.drag = null;
     renderOverlay();
@@ -1240,7 +1257,7 @@
     zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015));
   }, { passive: false });
   svg.addEventListener('dblclick', (e) => {
-    if (S.readonly) return;
+    if (S.readonly) { if (S.udraft) { S.udraft = null; renderOverlay(); } return; }
     if (S.tool === 'wall') { S.draft = null; renderOverlay(); return; }
     if (S.tool === 'floor') { closeFloor(); return; }
     if (S.tool === 'select') {
@@ -1619,6 +1636,7 @@
     $('#sch-hint').textContent = (S.tool === 'select' && S.multi) ? HINTS.multi : (HINTS[S.tool] || '');
     $('#sch-snap').checked = S.snap;
     svg.style.cursor = S.tool === 'select' ? 'default' : 'crosshair';
+    if (S.readonly) uniUpdateUI();
   }
 
   function refreshSelect() {
@@ -1628,6 +1646,7 @@
   function openSchema(id, keepView) {
     db.current = id;
     S.sel = null; S.draft = null; S.drag = null; S.undo = []; S.redo = [];
+    S.usel = null; S.udraft = null; S.uundo = []; S.uredo = [];
     const s = schema();
     if (s && s.view && !keepView) S.view = { ...s.view };
     else fitView();
@@ -1734,7 +1753,7 @@
   function saveFile() {
     const s = schema();
     const bgData = s.bg ? bgGet(s.id) : null;
-    const data = { app: 'electroformules-schema', version: 1, schema: { name: s.name, items: s.items, ...(bgData ? { bg: { ...s.bg, data: bgData } } : {}) } };
+    const data = { app: 'electroformules-schema', version: 1, schema: { name: s.name, items: s.items, ...(s.uni && s.uni.length ? { uni: s.uni } : {}), ...(bgData ? { bg: { ...s.bg, data: bgData } } : {}) } };
     download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), slug(s.name) + '.schema.json');
   }
 
@@ -1785,6 +1804,7 @@
         const list = data.schema.items.map((raw) => { const c = cleanItem(raw); if (c && raw && raw.locked === true) c.locked = true; return c; }).filter(Boolean);
         const s = newSchema(String(data.schema.name || 'Schéma importé').slice(0, 60));
         s.items = list;
+        if (Array.isArray(data.schema.uni)) s.uni = data.schema.uni.map(cleanUni).filter(Boolean);
         const rb = data.schema.bg;
         if (rb && typeof rb.data === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(rb.data) &&
             [rb.x, rb.y, rb.w, rb.h].every(num) && rb.w > 0 && rb.h > 0) {
@@ -1886,6 +1906,7 @@
       const s = schema();
       const c = newSchema((s.name + ' (copie)').slice(0, 60));
       c.items = clone(s.items);
+      if (s.uni) c.uni = clone(s.uni);
       if (s.bg && bgGet(s.id) && bgSet(c.id, bgGet(s.id))) c.bg = clone(s.bg);
       openSchema(c.id, false);
     });
@@ -1913,11 +1934,7 @@
 
   function onKey(e) {
     if (root.hidden) return;
-    if (S.readonly) {                       // plan en lecture seule : Ctrl+A ne sélectionne pas toute la page
-      const t = (e.target && e.target.tagName) || '';
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !/INPUT|SELECT|TEXTAREA/.test(t)) e.preventDefault();
-      return;
-    }
+    if (S.readonly) { uniKey(e); return; }
     const tag = (e.target && e.target.tagName) || '';
     if (/INPUT|SELECT|TEXTAREA/.test(tag)) return;
     const mod = e.ctrlKey || e.metaKey;
@@ -1954,7 +1971,7 @@
     const ro = mode === 'unifilaire';
     if (ro !== !!S.readonly) {
       S.readonly = ro;
-      S.drag = null; S.draft = null; S.fdraft = null; S.space = false;
+      S.drag = null; S.draft = null; S.fdraft = null; S.space = false; S.usel = null; S.udraft = null;
       if (ro) { S.sels = []; S.tool = 'select'; S.placeKey = null; }
       if (ready) { render(); updateUI(); }
     }
@@ -1962,6 +1979,362 @@
   root.querySelectorAll('[data-sch-subtab]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.schSubtab)));
   let startMode = 'implantation';
   try { startMode = window.localStorage.getItem('ef_sch_mode') || startMode; } catch (e) { /* ignoré */ }
+
+  /* ============================================================
+     Schémas unifilaires : traits noirs (câbles) marqués de leurs conducteurs
+     Données : schema.uni = [{ id, x1, y1, x2, y2, m: { c: { couleur: nombre }, N: nombre, T: nombre } }]
+     Chaque conducteur est une barre oblique de sa couleur ; le nombre est écrit à côté s'il dépasse 1.
+     Les éléments du plan d'implantation restent affichés mais ne sont pas modifiables ici.
+     ============================================================ */
+  const UNI_NEUTRE = '#3FA9F5';
+  const UNI_TERRE = '#00A859';
+  const UNI_COND = [
+    { c: '#FF0000', name: 'Rouge' },
+    { c: '#FF7F00', name: 'Orange' },
+    { c: '#8F00FF', name: 'Violet' },
+    { c: '#FFFFFF', name: 'Blanc' },
+    { c: '#7B3F00', name: 'Marron' },
+    { c: '#000000', name: 'Noir' },
+    { c: '#808080', name: 'Gris' },
+  ];
+  const UNI_MAX = { c: 12, N: 3, T: 3 };
+  const UNI_SPACING = 10;     // écart entre deux marques le long du trait
+  const UNI_NUM_GAP = 8;      // place supplémentaire laissée au chiffre
+  const UNI_HALF = 9;         // demi-longueur d'une barre oblique
+  const UNI_HINTS = {
+    select: 'Sélection : cliquez un trait pour le choisir, faites-le glisser pour le déplacer, tirez ses extrémités pour l’allonger. Le panneau « Marquage du trait » modifie son marquage. Glisser le fond déplace la vue ; molette ou pincement pour zoomer. Les éléments du plan d’implantation ne sont pas modifiables ici.',
+    line: 'Trait : faites glisser d’un point à un autre, ou cliquez le départ puis chaque point suivant (double-clic ou Échap pour terminer). Le marquage choisi dans le panneau « Marquage du trait » est appliqué au trait.',
+  };
+
+  const uniList = () => { const s = schema(); if (!s) return []; if (!Array.isArray(s.uni)) s.uni = []; return s.uni; };
+  const uniFind = (id) => uniList().find((l) => l.id === id) || null;
+  const uniSnap = () => JSON.stringify(uniList());
+  const uniSel = () => (S.usel ? uniFind(S.usel) : null);
+  const uniCount = (v, max) => (typeof v === 'number' && isFinite(v) ? Math.max(0, Math.min(max, Math.round(v))) : 0);
+
+  function uniCleanMarks(m) {
+    const out = { c: {}, N: 0, T: 0 };
+    if (!m || typeof m !== 'object') return out;
+    if (m.c && typeof m.c === 'object') {
+      for (const k of UNI_COND) { const n = uniCount(m.c[k.c], UNI_MAX.c); if (n) out.c[k.c] = n; }
+    }
+    out.N = uniCount(m.N, UNI_MAX.N);
+    out.T = uniCount(m.T, UNI_MAX.T);
+    return out;
+  }
+  function cleanUni(l) {
+    if (!l || typeof l !== 'object' || ![l.x1, l.y1, l.x2, l.y2].every(num)) return null;
+    return { id: typeof l.id === 'string' && l.id ? l.id : uid(), x1: l.x1, y1: l.y1, x2: l.x2, y2: l.y2, m: uniCleanMarks(l.m) };
+  }
+
+  // Annuler / rétablir propres aux traits (indépendants de l'implantation)
+  function uniSet(arr, rec) {
+    const s = schema();
+    if (!s) return;
+    s.uni = arr;
+    if (S.usel && !uniFind(S.usel)) S.usel = null;
+    if (rec !== false) save();
+    render(); updateUI();
+  }
+  function umutate(fn) {
+    const before = uniSnap();
+    fn();
+    if (uniSnap() === before) return;
+    S.uundo.push(before);
+    if (S.uundo.length > 100) S.uundo.shift();
+    S.uredo.length = 0;
+    save(); render(); updateUI();
+  }
+  function uniUndo() { if (!S.uundo.length) return; S.uredo.push(uniSnap()); uniSet(JSON.parse(S.uundo.pop())); }
+  function uniRedo() { if (!S.uredo.length) return; S.uundo.push(uniSnap()); uniSet(JSON.parse(S.uredo.pop())); }
+
+  /* ----- Dessin ----- */
+  // Liste ordonnée des marques : conducteurs (dans l'ordre de la palette), neutre, terre
+  function uniMarkList(m) {
+    const out = [];
+    for (const k of UNI_COND) { const n = (m.c && m.c[k.c]) || 0; if (n > 0) out.push({ kind: 'c', color: k.c, n }); }
+    if (m.N > 0) out.push({ kind: 'N', color: UNI_NEUTRE, n: m.N });
+    if (m.T > 0) out.push({ kind: 'T', color: UNI_TERRE, n: m.T });
+    return out;
+  }
+  // Barre oblique « / » : direction du trait tournée de ±50°, extrémité « haute » vers le haut de l'écran
+  function uniSlashDir(ux, uy) {
+    const a = rad(50), c = Math.cos(a), s = Math.sin(a);
+    const r1 = { x: ux * c - uy * s, y: ux * s + uy * c }, r2 = { x: ux * c + uy * s, y: -ux * s + uy * c };
+    let d = r1.x * r1.y < 0 ? r1 : r2.x * r2.y < 0 ? r2 : r1;
+    if (d.y > 0 || (d.y === 0 && d.x < 0)) d = { x: -d.x, y: -d.y };
+    return d;
+  }
+  function uniStroke(x1, y1, x2, y2, color, w) {
+    const ln = (c, sw) => `<line x1="${rnd(x1)}" y1="${rnd(y1)}" x2="${rnd(x2)}" y2="${rnd(y2)}" stroke="${c}" stroke-width="${sw}" stroke-linecap="round"/>`;
+    return (color.toUpperCase() === '#FFFFFF' ? ln('#000', w + 1.8) : '') + ln(color, w);
+  }
+  function uniMarkSVG(mk, cx, cy, d) {
+    const W = 2.2, h = UNI_HALF;
+    const tx = cx + d.x * h, ty = cy + d.y * h;          // extrémité haute
+    let o = uniStroke(cx - d.x * h, cy - d.y * h, tx, ty, mk.color, W);
+    if (mk.kind === 'N') {
+      o += (mk.color.toUpperCase() === '#FFFFFF' ? `<circle cx="${rnd(tx)}" cy="${rnd(ty)}" r="3.9" fill="#000"/>` : '') +
+        `<circle cx="${rnd(tx)}" cy="${rnd(ty)}" r="3" fill="${mk.color}"/>`;
+    } else if (mk.kind === 'T') {
+      const px = d.y, py = -d.x;                         // barre perpendiculaire en tête (symbole de terre)
+      o += uniStroke(tx - px * 5, ty - py * 5, tx + px * 5, ty + py * 5, mk.color, W);
+    }
+    if (mk.n > 1) {
+      const lx = tx + (mk.kind === 'c' ? 3 : 6), ly = ty + 1;
+      o += `<text x="${rnd(lx)}" y="${rnd(ly)}" font-size="10" font-weight="700" font-family="Arial, Helvetica, sans-serif" fill="#111">${mk.n}</text>`;
+    }
+    return o;
+  }
+  function uniLineSVG(l) {
+    let o = `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="#000" stroke-width="2" stroke-linecap="round"/>`;
+    const dx = l.x2 - l.x1, dy = l.y2 - l.y1, L = Math.hypot(dx, dy);
+    const marks = uniMarkList(l.m || {});
+    if (L < 1 || !marks.length) return o;
+    const ux = dx / L, uy = dy / L;
+    const sx = ux < 0 || (ux === 0 && uy < 0) ? -1 : 1;   // marques rangées de gauche à droite
+    const d = uniSlashDir(ux, uy);
+    const mx = (l.x1 + l.x2) / 2, my = (l.y1 + l.y2) / 2;
+    // positions le long du trait : un chiffre élargit l'écart avec la marque suivante
+    const pos = [];
+    let acc = 0;
+    marks.forEach((mk, i) => { pos.push(acc); acc += UNI_SPACING + (mk.n > 1 && i < marks.length - 1 ? UNI_NUM_GAP : 0); });
+    const mid = pos[pos.length - 1] / 2;
+    marks.forEach((mk, i) => {
+      const off = (pos[i] - mid) * sx;
+      o += uniMarkSVG(mk, mx + ux * off, my + uy * off, d);
+    });
+    return o;
+  }
+  function uniSceneSVG() { return uniList().map(uniLineSVG).join(''); }
+
+  function uniOverlaySVG() {
+    let o = '';
+    const k = S.view.k;
+    const l = uniSel();
+    if (l) {
+      o += `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="10" stroke-linecap="round"/>`;
+      for (const [x, y] of [[l.x1, l.y1], [l.x2, l.y2]]) o += `<circle cx="${x}" cy="${y}" r="${7 / k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    }
+    if (S.utool === 'line' && S.udraft) {
+      const c = S.cursor ? snapPt(S.cursor, STEP) : S.udraft;
+      o += `<g opacity="0.6">${uniLineSVG({ x1: S.udraft.x, y1: S.udraft.y, x2: c.x, y2: c.y, m: S.umark })}</g>`;
+      o += `<circle cx="${S.udraft.x}" cy="${S.udraft.y}" r="${4 / k}" fill="${SEL}"/>`;
+    }
+    return o;
+  }
+
+  function uniBBox() {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const l of uniList()) {
+      x0 = Math.min(x0, l.x1, l.x2) ; y0 = Math.min(y0, l.y1, l.y2);
+      x1 = Math.max(x1, l.x1, l.x2); y1 = Math.max(y1, l.y1, l.y2);
+    }
+    if (x0 === Infinity) return null;
+    return { x: x0 - 15, y: y0 - 15, w: x1 - x0 + 30, h: y1 - y0 + 30 };
+  }
+  function mergeBox(a, b) {
+    if (!a) return b;
+    if (!b) return a;
+    const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+    return { x: x0, y: y0, w: Math.max(a.x + a.w, b.x + b.w) - x0, h: Math.max(a.y + a.h, b.y + b.h) - y0 };
+  }
+
+  /* ----- Souris / toucher ----- */
+  function uniHit(p) {
+    const list = uniList(), tol = 6 / S.view.k + 2;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const l = list[i];
+      if (distSeg(p, l.x1, l.y1, l.x2, l.y2).d <= tol) return l;
+    }
+    return null;
+  }
+  function uniDown(e, p) {
+    const here = { cx: e.clientX, cy: e.clientY, moved: false };
+    if (S.utool === 'line') {
+      const q = snapPt(p, STEP);
+      if (!S.udraft) { S.udraft = q; S.drag = { mode: 'uLine', fresh: true, ...here }; }
+      else S.drag = { mode: 'uLine', fresh: false, ...here };
+      renderOverlay();
+      return;
+    }
+    const cur = uniSel();
+    if (cur) {
+      const r = 12 / S.view.k;
+      const h = Math.hypot(p.x - cur.x1, p.y - cur.y1) <= r ? 1 : Math.hypot(p.x - cur.x2, p.y - cur.y2) <= r ? 2 : 0;
+      if (h) { S.drag = { mode: 'uEnd', id: cur.id, h, before: uniSnap(), ...here }; return; }
+    }
+    const hit = uniHit(p);
+    if (hit) {
+      S.usel = hit.id;
+      S.drag = { mode: 'uMove', id: hit.id, p0: p, orig: clone(hit), before: uniSnap(), ...here };
+    } else {
+      S.usel = null;
+      S.drag = { mode: 'pan', cx: e.clientX, cy: e.clientY, vx: S.view.x, vy: S.view.y };
+    }
+    render(); updateUI();
+  }
+  function uniMove(d, p) {
+    const l = uniFind(d.id);
+    if (!l) return;
+    if (d.mode === 'uEnd') {
+      const q = snapPt(p, STEP);
+      if (d.h === 1) { l.x1 = q.x; l.y1 = q.y; } else { l.x2 = q.x; l.y2 = q.y; }
+    } else {
+      if (!d.moved) return;
+      const o = d.orig;
+      const ex = snapOn(o.x1 + p.x - d.p0.x, STEP) - o.x1, ey = snapOn(o.y1 + p.y - d.p0.y, STEP) - o.y1;
+      l.x1 = o.x1 + ex; l.y1 = o.y1 + ey; l.x2 = o.x2 + ex; l.y2 = o.y2 + ey;
+    }
+    uniG.innerHTML = uniSceneSVG();
+    renderOverlay();
+  }
+  function uniAdd(a, b) {
+    if (a.x === b.x && a.y === b.y) return;
+    const l = { id: uid(), x1: a.x, y1: a.y, x2: b.x, y2: b.y, m: clone(S.umark) };
+    umutate(() => uniList().push(l));
+  }
+  function uniUp(d, p, e) {
+    if (d.mode === 'uMove' || d.mode === 'uEnd') {
+      const l = uniFind(d.id);
+      if (l && l.x1 === l.x2 && l.y1 === l.y2) { uniSet(JSON.parse(d.before), false); return; }   // trait réduit à un point : refusé
+      if (uniSnap() !== d.before) {
+        S.uundo.push(d.before); if (S.uundo.length > 100) S.uundo.shift();
+        S.uredo.length = 0;
+        save();
+      }
+      render(); updateUI();
+      return;
+    }
+    // tracé d'un trait
+    const q = snapPt(p, STEP);
+    if (d.fresh) {
+      if (Math.hypot(e.clientX - d.cx, e.clientY - d.cy) > 8) { uniAdd(S.udraft, q); S.udraft = null; }
+    } else if (q.x === S.udraft.x && q.y === S.udraft.y) {
+      S.udraft = null;
+    } else {
+      uniAdd(S.udraft, q);
+      S.udraft = q;
+    }
+    renderOverlay();
+  }
+
+  function uniDelete() {
+    if (!S.usel) return;
+    const id = S.usel;
+    S.usel = null;
+    umutate(() => { const s = schema(); s.uni = uniList().filter((l) => l.id !== id); });
+  }
+  function setUTool(t) {
+    S.utool = t;
+    S.udraft = null; S.drag = null;
+    renderOverlay(); updateUI();
+  }
+
+  function uniKey(e) {
+    const tag = (e.target && e.target.tagName) || '';
+    if (/INPUT|SELECT|TEXTAREA/.test(tag)) return;
+    const mod = e.ctrlKey || e.metaKey, key = e.key;
+    if (key === ' ' && !/BUTTON/.test(tag)) { S.space = true; e.preventDefault(); return; }
+    if (mod && key.toLowerCase() === 'a') { e.preventDefault(); return; }     // ne pas sélectionner toute la page
+    if (mod && key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? uniRedo() : uniUndo(); return; }
+    if (mod && key.toLowerCase() === 'y') { e.preventDefault(); uniRedo(); return; }
+    if (key === 'Delete' || key === 'Backspace') { if (S.usel) { e.preventDefault(); uniDelete(); } return; }
+    if (key === 'Escape') {
+      if (S.udraft) { S.udraft = null; renderOverlay(); return; }
+      if (S.usel) { S.usel = null; render(); updateUI(); return; }
+      setUTool('select');
+      return;
+    }
+    const l = uniSel();
+    if (l && key.startsWith('Arrow')) {
+      e.preventDefault();
+      const st = e.shiftKey ? GRID : STEP;
+      const dx = key === 'ArrowLeft' ? -st : key === 'ArrowRight' ? st : 0, dy = key === 'ArrowUp' ? -st : key === 'ArrowDown' ? st : 0;
+      umutate(() => { l.x1 += dx; l.x2 += dx; l.y1 += dy; l.y2 += dy; });
+    }
+  }
+
+  /* ----- Panneau « Marquage » ----- */
+  function uniSwatch(kind, color) {
+    const mk = { kind, color, n: 1 };
+    return `<svg viewBox="-14 -12 28 24" width="34" height="28" aria-hidden="true"><line x1="-12" y1="4" x2="12" y2="4" stroke="#000" stroke-width="2"/>${uniMarkSVG(mk, 0, 4, uniSlashDir(1, 0))}</svg>`;
+  }
+  function uniRow(key, kind, color, name) {
+    return `<div class="uni-row" data-uni-row="${key}">${uniSwatch(kind, color)}<span class="uni-name">${esc(name)}</span>` +
+      `<button type="button" class="btn btn-ghost btn-sm" data-uni-dec="${key}" aria-label="Retirer un conducteur ${esc(name)}">−</button>` +
+      `<span class="uni-count" data-uni-val="${key}">0</span>` +
+      `<button type="button" class="btn btn-ghost btn-sm" data-uni-inc="${key}" aria-label="Ajouter un conducteur ${esc(name)}">+</button></div>`;
+  }
+  function uniPanelHTML() {
+    let h = '<p class="sch-group sch-group-main">Marquage du trait</p>' +
+      '<p class="uni-target" id="uni-target"></p>' +
+      '<p class="sch-note">Le nombre est écrit à côté de la marque quand il dépasse 1. À 0, la marque disparaît.</p>' +
+      '<p class="sch-subgroup">Neutre et terre</p>' +
+      uniRow('N', 'N', UNI_NEUTRE, 'Neutre') + uniRow('T', 'T', UNI_TERRE, 'Terre') +
+      '<p class="sch-subgroup">Conducteurs</p>';
+    for (const k of UNI_COND) h += uniRow(k.c, 'c', k.c, k.name);
+    return h;
+  }
+  // Valeur d'une marque : trait sélectionné, sinon réglage des prochains traits
+  const uniGet = (m, key) => (key === 'N' || key === 'T' ? m[key] || 0 : (m.c && m.c[key]) || 0);
+  function uniChange(key, delta) {
+    const apply = (m) => {
+      if (key === 'N' || key === 'T') m[key] = uniCount((m[key] || 0) + delta, UNI_MAX[key]);
+      else {
+        m.c = m.c || {};
+        const n = uniCount((m.c[key] || 0) + delta, UNI_MAX.c);
+        if (n) m.c[key] = n; else delete m.c[key];
+      }
+    };
+    const l = uniSel();
+    if (l) {                                  // le trait modifié sert aussi de modèle aux prochains traits
+      umutate(() => { l.m = l.m || { c: {}, N: 0, T: 0 }; apply(l.m); });
+      S.umark = clone(l.m);
+      return;
+    }
+    apply(S.umark);
+    updateUI();
+  }
+  function uniUpdateUI() {
+    root.querySelectorAll('[data-utool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.utool === S.utool)));
+    const l = uniSel();
+    const m = l ? (l.m || {}) : S.umark;
+    root.querySelectorAll('[data-uni-row]').forEach((row) => {
+      const key = row.dataset.uniRow, n = uniGet(m, key), max = key === 'N' || key === 'T' ? UNI_MAX[key] : UNI_MAX.c;
+      row.querySelector('[data-uni-val]').textContent = String(n);
+      row.classList.toggle('is-on', n > 0);
+      row.querySelector('[data-uni-dec]').disabled = n <= 0;
+      row.querySelector('[data-uni-inc]').disabled = n >= max;
+    });
+    const tg = $('#uni-target');
+    if (tg) tg.textContent = l ? 'Trait sélectionné' : 'Prochains traits';
+    $('#uni-undo').disabled = !S.uundo.length;
+    $('#uni-redo').disabled = !S.uredo.length;
+    $('#uni-delete').disabled = !l;
+    $('#sch-hint').textContent = UNI_HINTS[S.utool] || '';
+    svg.style.cursor = S.utool === 'line' ? 'crosshair' : 'default';
+  }
+  let uniBound = false;
+  function uniBind() {
+    if (uniBound) return;
+    uniBound = true;
+    const panel = $('#uni-panel');
+    panel.innerHTML = uniPanelHTML();
+    panel.addEventListener('click', (e) => {
+      const inc = e.target.closest('[data-uni-inc]');
+      if (inc) { uniChange(inc.dataset.uniInc, 1); return; }
+      const dec = e.target.closest('[data-uni-dec]');
+      if (dec) uniChange(dec.dataset.uniDec, -1);
+    });
+    root.querySelectorAll('[data-utool]').forEach((b) => b.addEventListener('click', () => setUTool(b.dataset.utool)));
+    $('#uni-undo').addEventListener('click', uniUndo);
+    $('#uni-redo').addEventListener('click', uniRedo);
+    $('#uni-delete').addEventListener('click', uniDelete);
+    $('#uni-zoom-in').addEventListener('click', () => zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, 1.25));
+    $('#uni-zoom-out').addEventListener('click', () => zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, 0.8));
+    $('#uni-fit').addEventListener('click', fitView);
+  }
 
   /* ---------- Entrée publique ---------- */
   let ready = false;
@@ -1972,6 +2345,7 @@
       if (!db.list.length) newSchema('Schéma 1');
       if (!schema()) db.current = db.list[0].id;
       bind();
+      uniBind();
       const s = schema();
       if (s && s.view) S.view = { ...s.view };
       refreshSelect();

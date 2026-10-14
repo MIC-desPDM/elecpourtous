@@ -832,32 +832,26 @@ dialog h2 {
 .sch-subtab:hover { color: var(--accent); }
 .sch-subtab[aria-selected='true'] { background: var(--accent); color: var(--accent-contrast); }
 
-.sch-soon {
-  display: none;
-  position: absolute;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 2;
-  padding: 8px 20px;
-  border-radius: 9999px;
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font-weight: 700;
-  font-size: 0.9375rem;
-  box-shadow: var(--shadow-md);
-  pointer-events: none;
-}
-
-/* Unifilaire : seul le plan reste affiché (lecture seule) */
+/* Unifilaire : outils d'implantation masqués, plan non modifiable, outils des traits affichés */
+.sch-uni-ui, .sch-uni-panel { display: none; }
 [data-sch-mode='unifilaire'] .sch-implantation-ui,
-[data-sch-mode='unifilaire'] .sch-palette,
-[data-sch-mode='unifilaire'] .sch-hint { display: none; }
-[data-sch-mode='unifilaire'] .sch-layout { grid-template-columns: 1fr; height: calc(100dvh - 230px); }
-[data-sch-mode='unifilaire'] .sch-soon { display: block; }
+[data-sch-mode='unifilaire'] #sch-palette { display: none; }
+[data-sch-mode='unifilaire'] .sch-uni-ui { display: block; }
+[data-sch-mode='unifilaire'] .sch-uni-panel { display: block; }
+[data-sch-mode='unifilaire'] .sch-layout { height: calc(100dvh - 300px); }
 @media (max-width: 800px) {
   [data-sch-mode='unifilaire'] .sch-layout { height: auto; }
 }
+
+.uni-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: var(--radius-sm); }
+.uni-row + .uni-row { border-top: 1px solid var(--divider); }
+.uni-row svg { background: #fff; border-radius: 4px; flex-shrink: 0; }
+.uni-name { flex: 1; font-size: 0.8125rem; color: var(--text); line-height: 1.2; }
+.uni-count { min-width: 1.6em; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+.uni-row .btn-sm { padding: 3px 10px; }
+.uni-row.is-on { background: var(--accent-soft); }
+.uni-target { font-size: 0.75rem; font-weight: 600; color: var(--accent); margin: 2px 0 6px; }
+
 @media (max-width: 640px) {
   .sch-subtabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border-radius: var(--radius-md); }
   .sch-subtab { padding: 8px 6px; font-size: 0.8125rem; white-space: normal; line-height: 1.25; border-radius: var(--radius-sm); }
