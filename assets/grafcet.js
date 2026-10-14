@@ -173,33 +173,71 @@
       }
     }
     const fwd = links.filter((l) => !back.has(l.id));
-    // rang = plus long chemin (ordre topologique)
-    const indeg = {}, rank = {};
-    for (const n of nodes) { indeg[n.id] = 0; rank[n.id] = 0; }
-    for (const l of fwd) indeg[l.b]++;
-    const queue = nodes.filter((n) => !indeg[n.id]).map((n) => n.id);
-    const fout = {};
-    for (const l of fwd) (fout[l.a] = fout[l.a] || []).push(l.b);
+    const fout = {}, fin = {};
+    for (const n of nodes) { fout[n.id] = []; fin[n.id] = []; }
+    for (const l of fwd) { fout[l.a].push(l.b); fin[l.b].push(l.a); }
+    // ordre topologique (Kahn)
+    const indeg = {};
+    for (const n of nodes) indeg[n.id] = fin[n.id].length;
+    const topo = [], queue = nodes.filter((n) => !indeg[n.id]).sort(byY).map((n) => n.id);
     while (queue.length) {
       const id = queue.shift();
-      for (const b of fout[id] || []) { rank[b] = Math.max(rank[b], rank[id] + 1); if (--indeg[b] === 0) queue.push(b); }
+      topo.push(id);
+      for (const b of fout[id]) if (--indeg[b] === 0) queue.push(b);
     }
-    // groupes reliés : chacun garde la hauteur de son élément de départ
+    // groupes reliés
     const parent = {};
     const findP = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
     for (const n of nodes) parent[n.id] = n.id;
     for (const l of fwd) parent[findP(l.a)] = findP(l.b);
-    const anchor = {};
-    for (const r of order) {
-      const c = findP(r.id);
-      if (anchor[c] === undefined && rank[r.id] === 0) anchor[c] = r.y;
+    const groups = {};
+    for (const n of nodes) (groups[findP(n.id)] = groups[findP(n.id)] || []).push(n);
+    // départ de chaque groupe : son étape initiale, sinon son élément sans prédécesseur le plus haut
+    const anchorY = {}, start = new Set();
+    for (const c of Object.keys(groups)) {
+      const g2 = groups[c];
+      let st = g2.filter((n) => n.t === 'step' && n.init && !fin[n.id].length);
+      if (!st.length) st = g2.filter((n) => !fin[n.id].length).sort(byY).slice(0, 1);
+      if (!st.length) st = g2.slice().sort(byY).slice(0, 1);
+      for (const n of st) start.add(n.id);
+      anchorY[c] = Math.min(...st.map((n) => n.y));
     }
+    // 1. rang = plus long chemin depuis le départ du groupe
+    const rank = {};
+    for (const id of topo) {
+      if (start.has(id)) { rank[id] = Math.max(rank[id] || 0, 0); }
+      if (rank[id] === undefined) continue;
+      for (const b of fout[id]) rank[b] = Math.max(rank[b] === undefined ? -Infinity : rank[b], rank[id] + 1);
+    }
+    // 2. branches qui rejoignent le cycle sans en partir (convergence) : placées juste au-dessus de l'élément rejoint
+    for (let k = topo.length - 1; k >= 0; k--) {
+      const id = topo[k];
+      if (rank[id] !== undefined) continue;
+      const rs = fout[id].map((b) => rank[b]).filter((r) => r !== undefined);
+      if (rs.length) rank[id] = Math.min(...rs) - 1;
+    }
+    // 3. ce qui reste (branches isolées) : à la suite de leur prédécesseur, sinon à leur hauteur actuelle
     const half = gap() / 2;
-    for (const n of nodes) {
-      const c = findP(n.id);
-      if (anchor[c] === undefined) continue;
-      n.y = rnd(anchor[c] + rank[n.id] * half);
+    for (const id of topo) {
+      if (rank[id] !== undefined) continue;
+      const rs = fin[id].map((a) => rank[a]).filter((r) => r !== undefined);
+      rank[id] = rs.length ? Math.max(...rs) + 1 : Math.round((byId[id].y - anchorY[findP(id)]) / half);
     }
+    for (const n of nodes) if (rank[n.id] === undefined) rank[n.id] = Math.round((n.y - anchorY[findP(n.id)]) / half);
+    for (const n of nodes) n.y = rnd(anchorY[findP(n.id)] + rank[n.id] * half);
+  }
+  // Éléments reliés (liaisons dans les deux sens) à ceux de la liste
+  function groupOf(ids) {
+    const all = items(), seen = new Set(ids), stack = [...ids];
+    const links = all.filter((l) => l.t === 'link');
+    while (stack.length) {
+      const id = stack.pop();
+      for (const l of links) {
+        const o = l.a === id ? l.b : l.b === id ? l.a : null;
+        if (o && !seen.has(o)) { seen.add(o); stack.push(o); }
+      }
+    }
+    return all.filter((i) => (i.t === 'step' || i.t === 'trans') && seen.has(i.id));
   }
   function changeGap(dir) {
     const g = G();
@@ -352,6 +390,11 @@
       }
     }
     for (const b of bars) {
+      if (b.x1 - b.x0 < 1) {                          // une seule branche descendante : simple trait, pas de barre
+        s += `<line x1="${b.stem[0]}" y1="${b.stem[1]}" x2="${b.stem[0]}" y2="${b.stem[2]}" stroke="${INK}" stroke-width="1.6"/>` +
+          `<line x1="${b.stem[0]}" y1="${b.y - 3}" x2="${b.stem[0]}" y2="${b.y + 3}" stroke="${INK}" stroke-width="1.6"/>`;
+        continue;
+      }
       s += `<line x1="${b.stem[0]}" y1="${b.stem[1]}" x2="${b.stem[0]}" y2="${b.stem[2]}" stroke="${INK}" stroke-width="1.6"/>`;
       if (b.double) {
         s += `<line x1="${b.x0 - 10}" y1="${b.y - 3}" x2="${b.x1 + 10}" y2="${b.y - 3}" stroke="${INK}" stroke-width="1.4"/>` +
@@ -753,7 +796,8 @@
           // déplacement : toutes les étapes et transitions sélectionnées (non figées) bougent ensemble
           const nodes = selItems().filter((i) => (i.t === 'step' || i.t === 'trans') && !i.locked);
           if (S.sels.includes(h.id) && (h.t === 'step' || h.t === 'trans') && !h.locked) {
-            S.drag = { mode: 'move', p0: p, orig: nodes.map((n) => [n.id, n.x, n.y]), before: snap(), moved: false, cx: e.clientX, cy: e.clientY, hitId: h.id, collapse: !additive && S.sels.length > 1 };
+            const grp = groupOf(nodes.map((n) => n.id));
+            S.drag = { mode: 'move', p0: p, orig: nodes.map((n) => [n.id, n.x]), origY: grp.map((n) => [n.id, n.y]), before: snap(), moved: false, cx: e.clientX, cy: e.clientY, hitId: h.id, collapse: !additive && S.sels.length > 1 };
           } else if (h.locked && !additive) hint('Élément figé : il ne peut pas être déplacé.');
         } else if (additive) {
           S.drag = { mode: 'marquee', a: p, cur: p, add: true };
@@ -797,7 +841,8 @@
       if (!d.moved && Math.hypot(e.clientX - d.cx, e.clientY - d.cy) < 3) return;
       d.moved = true;
       const dx = snapV(p.x - d.p0.x), dy = snapV(p.y - d.p0.y);
-      for (const [id, x, y] of d.orig) { const it = find(id); if (it) { it.x = x + dx; it.y = y + dy; } }
+      for (const [id, x] of d.orig) { const it = find(id); if (it) it.x = x + dx; }
+      for (const [id, y] of d.origY) { const it = find(id); if (it) it.y = y + dy; }
       relayout();
       sceneG.innerHTML = sceneSVG(); renderOverlay();
       return;
@@ -832,6 +877,10 @@
         mutate(() => { made = connect(a, b); });
         if (made && a.t === b.t) hint(a.t === 'step' ? 'Une transition a été ajoutée entre les deux étapes : double appui dessus pour écrire sa réceptivité.' : 'Une étape a été ajoutée entre les deux transitions.');
         else if (!made) hint('Ces deux éléments sont déjà reliés.');
+        else if (b.t === 'trans' && inCount(b.id) > 1) hint('Convergence en ET (double trait) : plusieurs étapes vers une même transition. Pour un OU, donnez à chaque branche sa propre transition, puis reliez ces transitions à l’étape suivante.');
+        else if (a.t === 'trans' && outCount(a.id) > 1) hint('Divergence en ET (double trait) : la transition active plusieurs étapes en même temps.');
+        else if (b.t === 'step' && inCount(b.id) > 1) hint('Convergence en OU (trait simple) : plusieurs transitions mènent à la même étape.');
+        else if (a.t === 'step' && outCount(a.id) > 1) hint('Divergence en OU (trait simple) : l’étape peut évoluer par l’une ou l’autre transition.');
       }
       renderOverlay();
     }
