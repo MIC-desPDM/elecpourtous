@@ -130,6 +130,7 @@
       <button type="button" class="btn btn-ghost btn-sm" id="sch-dup" title="Dupliquer (Ctrl+D)">Dupliquer</button>
       <button type="button" class="btn btn-ghost btn-sm" id="sch-lock" title="Figer ou libérer la sélection (L) : un élément figé ne peut plus être déplacé ni modifié. Un cadenas rouge le signale à l'écran, jamais dans les exports.">Figer</button>
       <button type="button" class="btn btn-ghost btn-sm" id="sch-unlockall" title="Libérer tous les éléments figés du schéma">Tout libérer</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool" id="sch-lockmarks" aria-pressed="false" title="Masquer ou afficher les cadenas des éléments figés (ils restent figés)">Masquer les cadenas</button>
       <button type="button" class="btn btn-danger btn-sm" id="sch-delete" title="Supprimer (Suppr)">Supprimer</button>
     </div>
 
@@ -145,6 +146,17 @@
       <button type="button" class="btn btn-ghost btn-sm" id="sch-bend-p" aria-label="Courber dans l'autre sens" title="Courber le mur sélectionné dans l'autre sens">+</button>
       <button type="button" class="btn btn-ghost btn-sm" id="sch-straight" title="Redresser le mur sélectionné">Redresser</button>
       <span class="sch-wallhint">Matériau : palette à gauche. Poignée orange au milieu d'un mur sélectionné : courber.</span>
+    </div>
+
+    <div class="sch-wallbar impl-only" id="sch-linkbar" role="toolbar" aria-label="Liaisons : épaisseur et transparence">
+      <span class="sch-bglabel">Liaisons</span>
+      <span class="sch-snap">Épaisseur</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-lw-m" aria-label="Affiner les liaisons">−</button>
+      <span class="sch-thval" id="sch-lw-val">2</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-lw-p" aria-label="Épaissir les liaisons">+</button>
+      <label class="sch-snap">Transparence <input type="range" id="sch-lt" min="0" max="90" step="5" value="0"> <span id="sch-lt-val">0 %</span></label>
+      <button type="button" class="btn btn-ghost btn-sm" id="sch-link-all" title="Applique l'épaisseur et la transparence de la liaison sélectionnée (ou les réglages courants) à toutes les liaisons">Appliquer à toutes les liaisons</button>
+      <span class="sch-wallhint">S'applique aux liaisons sélectionnées et aux prochaines liaisons.</span>
     </div>
 
     <div class="sch-bgbar" id="sch-bgbar" role="toolbar" aria-label="Fond de plan">

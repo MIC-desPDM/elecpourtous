@@ -24,9 +24,12 @@
 
   const GRID = 20;          // pas de la grille (murs)
   const STEP = 10;          // pas d'accrochage des symboles
-  const INK = SYM.INK;
+  const INK = '#0a2a66';    // portes et fenêtres (les symboles électriques ont leur propre couleur : SYM.INK)
   const WALL_COLOR = '#3b3b3b';
-  const LINK_COLOR = '#5a6b86';
+  const LINK_COLOR = '#ff1a1a';   // liaisons : rouge vif
+  const LINK_W = 2;               // épaisseur par défaut des liaisons
+  const clampLW = (v) => Math.max(0.5, Math.min(12, Math.round(v * 2) / 2));
+  const clampLT = (v) => Math.max(0, Math.min(0.9, Math.round(v * 100) / 100));
   const SEL = '#2f7df6';
   const WALL_TH = 8;        // épaisseur des murs créés avant l'ajout des matériaux
   const LINE = '#222';
@@ -124,7 +127,11 @@
     readonly: false,
     umark: { c: { '#FF0000': 1 }, N: 1, T: 1 },   // marquage des prochains traits
     hist: null,            // historiques Annuler / Rétablir propres à chaque sous-partie
+    linkW: LINK_W,         // épaisseur des prochaines liaisons
+    linkT: 0,              // transparence des prochaines liaisons (0 = opaque, 0.9 = presque invisible)
+    lockMarks: true,       // affichage des cadenas des éléments figés
   };
+  try { if (window.localStorage.getItem('ef_sch_locks') === '0') S.lockMarks = false; } catch (e) { /* ignoré */ }
   function resetHist() {
     S.hist = { implantation: { undo: [], redo: [] }, unifilaire: { undo: [], redo: [] } };
     const h = S.hist[S.readonly ? 'unifilaire' : 'implantation'];
@@ -394,7 +401,8 @@
 
   function linkSVG(list, l) {
     const a = resolveEnd(list, l.a), b = resolveEnd(list, l.b);
-    return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${LINK_COLOR}" stroke-width="1.4" stroke-linecap="round"/>`;
+    const op = 1 - (l.tr || 0);
+    return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${LINK_COLOR}" stroke-width="${l.w || LINK_W}"${op < 1 ? ` stroke-opacity="${rnd(op)}"` : ''} stroke-linecap="round"/>`;
   }
 
   function symSVG(s) {
@@ -497,7 +505,7 @@
     }
     if (it.t === 'link') {
       const a = resolveEnd(items(), it.a), b = resolveEnd(items(), it.b);
-      return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${SEL}" stroke-opacity="0.5" stroke-width="5" stroke-linecap="round"/>`;
+      return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${SEL}" stroke-opacity="0.5" stroke-width="${(it.w || LINK_W) + 4}" stroke-linecap="round"/>`;
     }
     if (it.t === 'floor') {
       const pts = it.pts.map((q) => q[0] + ',' + q[1]).join(' ');
@@ -532,9 +540,21 @@
     const b = itemBounds(it);
     return { x: b[2], y: b[1] };
   }
+  // Taille de l'objet (plus grande dimension), dans les unités du plan
+  function itemSize(it) {
+    if (it.t === 'link') {
+      const a = resolveEnd(items(), it.a), b = resolveEnd(items(), it.b);
+      return Math.hypot(b.x - a.x, b.y - a.y);
+    }
+    if (isSeg(it)) return Math.hypot(it.x2 - it.x1, it.y2 - it.y1);
+    const b = itemBounds(it);
+    return b ? Math.max(b[2] - b[0], b[3] - b[1]) : 30;
+  }
+  // Le cadenas mesure le tiers de l'objet figé : il grandit et rétrécit avec le zoom comme l'objet
   function lockSVG(it) {
     const p = lockPos(it);
-    return `<g class="sch-lockmark" transform="translate(${rnd(p.x)} ${rnd(p.y)}) scale(${1 / S.view.k})">` +
+    const sc = Math.max(1, itemSize(it)) / 3 / 20;      // dessin du cadenas : 20 unités de diamètre
+    return `<g class="sch-lockmark" transform="translate(${rnd(p.x)} ${rnd(p.y)}) scale(${rnd(sc * 1000) / 1000})">` +
       `<circle r="10" fill="#fff" fill-opacity="0.92" stroke="${LOCK_RED}" stroke-width="1.2"/>` +
       `<path d="M-3.6 -0.5 V-3.4 a3.6 3.6 0 0 1 7.2 0 V-0.5" fill="none" stroke="${LOCK_RED}" stroke-width="1.9" stroke-linecap="round"/>` +
       `<rect x="-5.4" y="-0.8" width="10.8" height="8" rx="1.6" fill="${LOCK_RED}"/>` +
@@ -551,7 +571,7 @@
     }
     const c = S.cursor;
     const k = S.view.k;
-    for (const it of items()) if (it.locked) o += lockSVG(it);
+    if (S.lockMarks) for (const it of items()) if (it.locked) o += lockSVG(it);
     if (S.tool === 'bg') {
       const cb = currentBg();
       if (cb) {
@@ -578,8 +598,13 @@
       o += `<line x1="${S.draft.x}" y1="${S.draft.y}" x2="${q.x}" y2="${q.y}" stroke="${SEL}" stroke-opacity="0.6" stroke-width="${S.th}" stroke-linecap="square"/>`;
       o += `<circle cx="${S.draft.x}" cy="${S.draft.y}" r="${5 / k}" fill="${SEL}"/>`;
     }
+    if (S.tool === 'uline' && c) {                     // repère d'aimantation sous le curseur
+      const sn = uniSnap(c, S.draft);
+      if (sn.hit) o += snapRingSVG(sn);
+    }
+    if (S.drag && S.drag.mode === 'wallEnd' && S.drag.snap && S.drag.snap.hit) o += snapRingSVG(S.drag.snap);
     if (S.tool === 'uline' && S.draft) {
-      const q = c ? snapPt(c, STEP) : S.draft;
+      const q = c ? uniSnap(c, S.draft) : S.draft;
       o += `<g opacity="0.6">${ulineSVG({ x1: S.draft.x, y1: S.draft.y, x2: q.x, y2: q.y, m: S.umark })}</g>`;
       o += `<circle cx="${S.draft.x}" cy="${S.draft.y}" r="${5 / k}" fill="${SEL}"/>`;
     }
@@ -707,7 +732,7 @@
       const it = list[i];
       if (it.t !== 'link') continue;
       const a = resolveEnd(list, it.a), b = resolveEnd(list, it.b);
-      if (distSeg(p, a.x, a.y, b.x, b.y).d <= 4 + tol) return it;
+      if (distSeg(p, a.x, a.y, b.x, b.y).d <= Math.max(4, (it.w || LINK_W) / 2 + 2) + tol) return it;
     }
     for (let i = list.length - 1; i >= 0; i--) {
       const it = list[i];
@@ -844,7 +869,7 @@
     uline: 'Trait : faites glisser d’un point à un autre, ou cliquez le départ puis chaque point suivant (double-clic ou Échap pour terminer). Le marquage (neutre, terre, conducteurs) se règle dans le panneau « Marquage du trait ».',
     jbox: 'Boîte de dérivation : cliquez pour en poser une, ou faites glisser pour fixer sa taille (Maj : carré parfait). Elle est numérotée BD0, BD1, BD2… ; « Modifier le numéro » ou un double-clic change le numéro.',
   };
-  const UNI_SELECT_HINT = 'Unifilaire : le plan d’implantation est affiché mais ne peut pas être modifié ici. Cliquez un trait, une boîte, un symbole ou un texte pour le déplacer ; glisser le fond déplace la vue ; molette ou pincement pour zoomer.';
+  const UNI_SELECT_HINT = 'Unifilaire : le plan d’implantation est affiché mais ne peut pas être modifié ici. Cliquez un trait, une boîte ou un texte pour le déplacer ; glisser le fond déplace la vue ; molette ou pincement pour zoomer.';
 
   function setTool(tool, key) {
     S.tool = tool;
@@ -979,7 +1004,7 @@
         break;
       }
       case 'uline': {
-        const q = snapPt(p, STEP);
+        const q = uniSnap(p, S.draft);
         if (!S.draft) { S.draft = { x: q.x, y: q.y }; S.drag = { mode: 'uline', fresh: true, cx: e.clientX, cy: e.clientY }; }
         else { S.drag = { mode: 'uline', fresh: false, cx: e.clientX, cy: e.clientY }; }
         renderOverlay();
@@ -1179,7 +1204,11 @@
     if (d.mode === 'wallEnd') {
       const w = findItem(d.id);
       if (!w) return;
-      const q = snapPt(p, w.t === 'uline' ? STEP : GRID);
+      let q = snapPt(p, GRID);
+      if (w.t === 'uline') {
+        const other = d.h === 1 ? { x: w.x2, y: w.y2 } : { x: w.x1, y: w.y1 };
+        q = d.snap = uniSnap(p, other, w.id);
+      }
       if (d.ox === undefined) { d.ox = d.h === 1 ? w.x1 : w.x2; d.oy = d.h === 1 ? w.y1 : w.y2; }
       if (d.h === 1) { w.x1 = q.x; w.y1 = q.y; } else { w.x2 = q.x; w.y2 = q.y; }
       if (w.t === 'uline' && w.x1 === w.x2 && w.y1 === w.y2) { if (d.h === 1) { w.x1 = d.ox; w.y1 = d.oy; } else { w.x2 = d.ox; w.y2 = d.oy; } }
@@ -1246,7 +1275,7 @@
       return;
     }
     if (d.mode === 'uline') {
-      const q = snapPt(p, STEP);
+      const q = uniSnap(p, S.draft);
       if (d.fresh) {
         if (Math.hypot(e.clientX - d.cx, e.clientY - d.cy) > 8) {
           if (q.x !== S.draft.x || q.y !== S.draft.y) addULine(S.draft, q);
@@ -1302,7 +1331,7 @@
       const same = (d.a.id && d.a.id === b.id) || (!d.a.id && !b.id && d.a.x === b.x && d.a.y === b.y);
       const a = resolveEnd(items(), d.a);
       if (!same && Math.hypot(a.x - b.x, a.y - b.y) > 2) {
-        mutate(() => items().push({ id: uid(), t: 'link', a: d.a, b }));
+        mutate(() => items().push({ id: uid(), t: 'link', a: d.a, b, w: S.linkW, ...(S.linkT ? { tr: S.linkT } : {}) }));
       }
       renderOverlay();
     }
@@ -1509,7 +1538,7 @@
     const moved = (e) => ({ ...e, id: map[e.id], x: e.x + GRID, y: e.y + GRID });
     for (const l of items()) {
       if (l.t === 'link' && l.a && l.b && l.a.id && l.b.id && map[l.a.id] && map[l.b.id]) {
-        copies.push({ id: uid(), t: 'link', a: moved(l.a), b: moved(l.b) });
+        copies.push({ ...clone(l), id: uid(), a: moved(l.a), b: moved(l.b) });
       }
     }
     mutate(() => items().push(...copies));
@@ -1616,6 +1645,42 @@
     mutate(() => { for (const w of walls) { w.mat = mat; w.th = th; } syncOpenings(); });
   }
 
+  /* ---------- Liaisons : épaisseur et transparence ---------- */
+  const selLinks = () => selItems().filter((i) => i.t === 'link' && !i.locked);
+  function changeLinkWidth(dir) {
+    const ls = selLinks();
+    const nw = clampLW((ls.length ? (ls[0].w || LINK_W) : S.linkW) + 0.5 * dir);
+    S.linkW = nw;
+    if (ls.length) mutate(() => { for (const l of ls) l.w = nw; });
+    else updateUI();
+  }
+  function setLinkTransparency(v, final) {
+    const t = clampLT(v);
+    S.linkT = t;
+    const ls = selLinks();
+    if (!ls.length) { updateUI(); return; }
+    if (!S.ltBefore) S.ltBefore = snapJSON();          // un seul « Annuler » pour tout le glissement du curseur
+    for (const l of ls) { if (t) l.tr = t; else delete l.tr; }
+    renderScene();
+    if (final) {
+      if (snapJSON() !== S.ltBefore) { pushUndo(S.ltBefore); save(); }
+      S.ltBefore = null;
+      updateUI();
+    }
+  }
+  function applyAllLinks() {
+    const ls = items().filter((i) => i.t === 'link' && !i.locked);
+    if (!ls.length) return;
+    const src = selLinks()[0];
+    const w = src ? (src.w || LINK_W) : S.linkW, t = src ? (src.tr || 0) : S.linkT;
+    mutate(() => { for (const l of ls) { l.w = w; if (t) l.tr = t; else delete l.tr; } });
+  }
+  function toggleLockMarks() {
+    S.lockMarks = !S.lockMarks;
+    try { window.localStorage.setItem('ef_sch_locks', S.lockMarks ? '1' : '0'); } catch (e) { /* ignoré */ }
+    renderOverlay(); updateUI();
+  }
+
   /* ---------- Interface ---------- */
   function paletteHTML() {
     let h = `<div class="uni-only">${uniPanelHTML()}</div><div class="impl-only">` +
@@ -1637,7 +1702,7 @@
       }
       h += '</div>';
     }
-    h += '</div><h3 class="sch-group sch-group-main" style="margin-top:18px">Symboles électriques</h3>';
+    h += '</div><div class="impl-only"><h3 class="sch-group sch-group-main" style="margin-top:18px">Symboles électriques</h3>';
     for (const g of SYM.groups) {
       h += `<h3 class="sch-group">${esc(g.name)}</h3><div class="sch-syms">`;
       for (const d of g.items) {
@@ -1648,6 +1713,7 @@
       }
       h += '</div>';
     }
+    h += '</div>';
     return h;
   }
 
@@ -1680,6 +1746,14 @@
     en('#sch-bend-p', bw.length > 0);
     en('#sch-straight', bw.some((w) => w.bend));
     en('#sch-unlockall', items().some((i) => i.locked));
+    $('#sch-lockmarks').textContent = S.lockMarks ? 'Masquer les cadenas' : 'Afficher les cadenas';
+    $('#sch-lockmarks').setAttribute('aria-pressed', String(!S.lockMarks));
+    const lks = selLinks();
+    const lw = lks.length ? (lks[0].w || LINK_W) : S.linkW, lt = lks.length ? (lks[0].tr || 0) : S.linkT;
+    $('#sch-lw-val').textContent = String(lw);
+    if (document.activeElement !== $('#sch-lt')) $('#sch-lt').value = String(Math.round(lt * 100));
+    $('#sch-lt-val').textContent = Math.round(lt * 100) + ' %';
+    en('#sch-link-all', items().some((i) => i.t === 'link'));
     $('#sch-lock').textContent = list.length && nLocked === list.length ? 'Libérer' : 'Figer';
     en('#sch-selectall', items().some((i) => i.t !== 'link'));
     $('#sch-selcount').textContent = list.length > 1
@@ -1873,7 +1947,7 @@
       case 'link': {
         const end = (e) => (e && num(e.x) && num(e.y) ? { ...(typeof e.id === 'string' ? { id: e.id } : {}), x: e.x, y: e.y } : null);
         const a = end(it.a), b = end(it.b);
-        return a && b ? { id, t: 'link', a, b } : null;
+        return a && b ? { id, t: 'link', a, b, ...(num(it.w) ? { w: clampLW(it.w) } : {}), ...(num(it.tr) && it.tr > 0 ? { tr: clampLT(it.tr) } : {}) } : null;
       }
       default: return null;
     }
@@ -1933,6 +2007,12 @@
     $('#sch-palette').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e.target.closest('[data-uni-val]')) e.target.blur();
     });
+    $('#sch-lw-m').addEventListener('click', () => changeLinkWidth(-1));
+    $('#sch-lw-p').addEventListener('click', () => changeLinkWidth(1));
+    $('#sch-lt').addEventListener('input', (e) => { setLinkTransparency(Number(e.target.value) / 100, false); $('#sch-lt-val').textContent = e.target.value + ' %'; });
+    $('#sch-lt').addEventListener('change', (e) => setLinkTransparency(Number(e.target.value) / 100, true));
+    $('#sch-link-all').addEventListener('click', applyAllLinks);
+    $('#sch-lockmarks').addEventListener('click', toggleLockMarks);
     $('#sch-th-m').addEventListener('click', () => changeThickness(-1));
     $('#sch-th-p').addEventListener('click', () => changeThickness(1));
     $('#sch-mat-all').addEventListener('click', applyAllWalls);
@@ -2059,7 +2139,7 @@
 
   /* ---------- Sous-parties : Implantation / Unifilaire ---------- */
   const MODES = ['implantation', 'unifilaire'];
-  const UNI_TOOLS = ['select', 'uline', 'jbox', 'text', 'place', 'bg'];
+  const UNI_TOOLS = ['select', 'uline', 'jbox', 'text', 'bg'];
   const IMPL_TOOLS = ['select', 'wall', 'room', 'floor', 'circle', 'square', 'triangle', 'door', 'window', 'text', 'link', 'place', 'bg'];
   function setMode(mode) {
     if (!MODES.includes(mode)) mode = 'implantation';
@@ -2073,6 +2153,7 @@
       S.drag = null; S.draft = null; S.fdraft = null; S.space = false; S.sels = []; gcMemo = null;
       const allowed = ro ? UNI_TOOLS : IMPL_TOOLS;
       if (!allowed.includes(S.tool)) { S.tool = 'select'; S.placeKey = null; }
+      const pal = $('#sch-palette'); if (pal) pal.scrollTop = 0;   // la palette change de contenu : retour en haut
       if (ready) { render(); updateUI(); }
     }
   }
@@ -2169,8 +2250,78 @@
     return o;
   }
   function addULine(a, b) {
+    a = symEdge(a, b);                         // départ posé au centre d'un symbole : ramené sur son bord, face au trait
     const it = { id: uid(), t: 'uline', x1: a.x, y1: a.y, x2: b.x, y2: b.y, m: clone(S.umark) };
     mutate(() => items().push(it));
+  }
+
+  /* ----- Aimantation des traits ----- */
+  // Points d'accroche, par priorité : extrémités des autres traits, symboles électriques du plan
+  // d'implantation (bord du symbole, face à l'autre extrémité), contour extérieur des boîtes de dérivation
+  // (milieu des côtés de préférence). Sinon, la grille magnétique s'applique.
+  function symRadius(sy) {
+    const d = SYM.map[sy.key];
+    if (!d) return 10;
+    const [x0, y0, x1, y1] = d.b;
+    return (Math.min(x1 - x0, y1 - y0) / 2) * (sy.s || 1);
+  }
+  function symEdge(pt, other) {
+    if (!other) return pt;
+    for (const sy of implItems()) {
+      if (sy.t !== 'sym' || Math.abs(sy.x - pt.x) > 0.5 || Math.abs(sy.y - pt.y) > 0.5) continue;
+      const dx = other.x - sy.x, dy = other.y - sy.y, L = Math.hypot(dx, dy), r = symRadius(sy);
+      if (L <= r) return pt;
+      return { x: rnd(sy.x + (dx / L) * r), y: rnd(sy.y + (dy / L) * r) };
+    }
+    return pt;
+  }
+  function uniSnap(p, other, skipId) {
+    const R = 14 / S.view.k;
+    let best = null;
+    const take = (x, y, d, kind) => { if (d <= R && (!best || d < best.d)) best = { x: rnd(x), y: rnd(y), d, kind }; };
+    // 1. extrémités des autres traits
+    for (const l of uniItems()) {
+      if (l.t !== 'uline' || l.id === skipId) continue;
+      take(l.x1, l.y1, Math.hypot(p.x - l.x1, p.y - l.y1), 'end');
+      take(l.x2, l.y2, Math.hypot(p.x - l.x2, p.y - l.y2), 'end');
+    }
+    if (best) return { ...best, hit: true };
+    // 2. symboles électriques de l'implantation
+    for (const sy of implItems()) {
+      if (sy.t !== 'sym') continue;
+      const r = symRadius(sy), d = Math.hypot(p.x - sy.x, p.y - sy.y);
+      if (d > r + R) continue;
+      const e = other ? symEdge({ x: sy.x, y: sy.y }, other) : { x: sy.x, y: sy.y };
+      if (!best || d < best.d) best = { x: e.x, y: e.y, d, kind: 'sym', cx: sy.x, cy: sy.y, r };
+    }
+    if (best) return { ...best, hit: true };
+    // 3. contour extérieur des boîtes de dérivation
+    for (const bx of uniItems()) {
+      if (!isJbox(bx)) continue;
+      const l = toLocal(bx, p), hw = bx.w / 2, hh = bx.h / 2;
+      const inside = Math.abs(l.x) <= hw && Math.abs(l.y) <= hh;
+      let qx = Math.max(-hw, Math.min(hw, l.x)), qy = Math.max(-hh, Math.min(hh, l.y));
+      if (inside) {                                 // depuis l'intérieur : côté le plus proche
+        const dl = [hw - Math.abs(l.x), hh - Math.abs(l.y)];
+        if (dl[0] < dl[1]) qx = Math.sign(l.x || 1) * hw; else qy = Math.sign(l.y || 1) * hh;
+      }
+      const d = inside ? 0 : Math.hypot(l.x - qx, l.y - qy);
+      if (d > R) continue;
+      // milieu du côté si l'on en est proche
+      for (const [mx, my] of [[0, -hh], [hw, 0], [0, hh], [-hw, 0]]) {
+        if (Math.hypot(qx - mx, qy - my) <= R * 0.8) { qx = mx; qy = my; break; }
+      }
+      const a = rad(bx.rot || 0);
+      const wx = bx.x + qx * Math.cos(a) - qy * Math.sin(a), wy = bx.y + qx * Math.sin(a) + qy * Math.cos(a);
+      if (!best || d < best.d) best = { x: rnd(wx), y: rnd(wy), d, kind: 'box' };
+    }
+    if (best) return { ...best, hit: true };
+    return { ...snapPt(p, STEP), hit: false };
+  }
+  function snapRingSVG(sn) {
+    const k = S.view.k;
+    return `<circle cx="${sn.x}" cy="${sn.y}" r="${7 / k}" fill="none" stroke="#ff8a00" stroke-width="2" vector-effect="non-scaling-stroke"/>` +
+      `<circle cx="${sn.x}" cy="${sn.y}" r="${2 / k}" fill="#ff8a00"/>`;
   }
 
   /* ----- Boîtes de dérivation : carré blanc repéré « BDx » (x commence à 0 et augmente de 1) ----- */

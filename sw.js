@@ -1,6 +1,6 @@
 /* Service worker : fonctionnement hors ligne.
    Incrémenter CACHE_VERSION à chaque modification des fichiers pour forcer la mise à jour. */
-const CACHE_VERSION = 'v12';
+const CACHE_VERSION = 'v13';
 const CACHE = 'electroformules-' + CACHE_VERSION;
 const FILES = [
   "./",

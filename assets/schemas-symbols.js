@@ -8,7 +8,7 @@
 (function () {
   'use strict';
 
-  const INK = '#0a2a66';
+  const INK = '#3d9be9';     // bleu clair : couleur de tous les symboles électriques
 
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const circ = (r, cx = 0, cy = 0, x = '') => `<circle cx="${cx}" cy="${cy}" r="${r}" ${x}/>`;
