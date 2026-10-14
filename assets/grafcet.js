@@ -66,7 +66,7 @@
   } catch (e) { /* ignoré */ }
 
   /* ---------- Données ---------- */
-  function emptyG() { return { items: [], tx: { systeme: {}, operative: {}, commande: {}, automate: {} } }; }
+  function emptyG() { return { items: [], tx: { systeme: {}, operative: {}, commande: {}, automate: {} }, v27: true }; }
   function G() {
     const api = API(), s = api && api.schema();
     if (!s) return null;
@@ -98,8 +98,9 @@
     for (const it of raw.items) {
       if (!it || typeof it.id !== 'string') continue;
       if (it.t === 'act' && ids.has(it.step)) { g.items.push({ id: it.id, t: 'act', step: it.step, ord: num(it.ord) ? it.ord : 0, ...(it.locked === true ? { locked: true } : {}) }); ids.add(it.id); }
-      if (it.t === 'link' && ids.has(it.a) && ids.has(it.b)) g.items.push({ id: it.id, t: 'link', a: it.a, b: it.b });
+      if (it.t === 'link' && ids.has(it.a) && ids.has(it.b)) g.items.push({ id: it.id, t: 'link', a: it.a, b: it.b, ...(it.up === true ? { up: true } : {}) });
     }
+    g.v27 = !!raw.v27;                                // fichier ancien : ses renvois seront reconnus à l'ouverture
     if (num(raw.gap)) g.gap = Math.max(GAP_MIN, Math.min(GAP_MAX, Math.round(raw.gap / 10) * 10));
     const tx = raw.tx || {};
     for (const v of VIEWS) {
@@ -134,110 +135,116 @@
   function doUndo() { if (!S.undo.length) return; S.redo.push(snap()); restore(S.undo.pop()); }
   function doRedo() { if (!S.redo.length) return; S.undo.push(snap()); restore(S.redo.pop()); }
 
-  /* ---------- Disposition : l'écart vertical entre deux étapes est toujours le même ----------
-     Chaque élément reçoit un rang (plus long chemin depuis le début du cycle, sans compter les reprises
-     de séquence) ; sa hauteur vaut : hauteur du début + rang × (écart / 2). Étapes et transitions alternent,
-     donc deux étapes qui se suivent sont toujours séparées d'un écart. Seule la position horizontale est libre. */
+  /* ---------- Disposition par blocs ----------
+     Deux éléments reliés et face à face (même colonne, liaison descendante, pas un renvoi) forment un bloc :
+     dans un bloc, l'écart entre deux étapes est toujours le même (réglage « écart »). Une liaison décalée
+     n'impose rien : chaque bloc garde la position où on l'a posé et se déplace librement. */
+  const FACE_TOL = 0.5;
+  function rigid(l, byId) {
+    const a = byId[l.a], b = byId[l.b];
+    return !!a && !!b && !l.up && Math.abs(a.x - b.x) < FACE_TOL;
+  }
   function relayout() {
     const g = G();
     if (!g) return;
     const nodes = g.items.filter((i) => i.t === 'step' || i.t === 'trans');
-    if (!nodes.length) return;
     const byId = {};
     for (const n of nodes) byId[n.id] = n;
-    const links = g.items.filter((l) => l.t === 'link' && byId[l.a] && byId[l.b]);
-    const out = {}, inc = {};
-    for (const n of nodes) { out[n.id] = []; inc[n.id] = 0; }
-    for (const l of links) { out[l.a].push(l); inc[l.b]++; }
-    // ordre de départ : étapes initiales, puis éléments sans prédécesseur, puis les autres (de haut en bas)
-    const byY = (a, b) => a.y - b.y || a.x - b.x;
-    const order = [
-      ...nodes.filter((n) => n.t === 'step' && n.init).sort(byY),
-      ...nodes.filter((n) => !inc[n.id]).sort(byY),
-      ...nodes.slice().sort(byY),
-    ];
-    // parcours en profondeur : une liaison vers un élément « en cours » est une reprise de séquence
-    const state = {}, back = new Set();
-    for (const r of order) {
-      if (state[r.id]) continue;
-      const stack = [[r.id, 0]];
-      state[r.id] = 1;
-      while (stack.length) {
-        const top = stack[stack.length - 1];
-        const ls = out[top[0]].slice().sort((a, b) => byY(byId[a.b], byId[b.b]));
-        if (top[1] < ls.length) {
-          const l = ls[top[1]++];
-          if (state[l.b] === 1) back.add(l.id);
-          else if (!state[l.b]) { state[l.b] = 1; stack.push([l.b, 0]); }
-        } else { state[top[0]] = 2; stack.pop(); }
-      }
-    }
-    const fwd = links.filter((l) => !back.has(l.id));
-    const fout = {}, fin = {};
-    for (const n of nodes) { fout[n.id] = []; fin[n.id] = []; }
-    for (const l of fwd) { fout[l.a].push(l.b); fin[l.b].push(l.a); }
-    // ordre topologique (Kahn)
-    const indeg = {};
-    for (const n of nodes) indeg[n.id] = fin[n.id].length;
-    const topo = [], queue = nodes.filter((n) => !indeg[n.id]).sort(byY).map((n) => n.id);
-    while (queue.length) {
-      const id = queue.shift();
-      topo.push(id);
-      for (const b of fout[id]) if (--indeg[b] === 0) queue.push(b);
-    }
-    // groupes reliés
+    const rl = g.items.filter((l) => l.t === 'link' && rigid(l, byId));
+    if (!rl.length) return;
+    const out = {}, indeg = {};
+    for (const n of nodes) { out[n.id] = []; indeg[n.id] = 0; }
+    for (const l of rl) { out[l.a].push(l.b); indeg[l.b]++; }
+    // blocs
     const parent = {};
     const findP = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
     for (const n of nodes) parent[n.id] = n.id;
-    for (const l of fwd) parent[findP(l.a)] = findP(l.b);
-    const groups = {};
-    for (const n of nodes) (groups[findP(n.id)] = groups[findP(n.id)] || []).push(n);
-    // départ de chaque groupe : son étape initiale, sinon son élément sans prédécesseur le plus haut
-    const anchorY = {}, start = new Set();
-    for (const c of Object.keys(groups)) {
-      const g2 = groups[c];
-      let st = g2.filter((n) => n.t === 'step' && n.init && !fin[n.id].length);
-      if (!st.length) st = g2.filter((n) => !fin[n.id].length).sort(byY).slice(0, 1);
-      if (!st.length) st = g2.slice().sort(byY).slice(0, 1);
-      for (const n of st) start.add(n.id);
-      anchorY[c] = Math.min(...st.map((n) => n.y));
+    for (const l of rl) parent[findP(l.a)] = findP(l.b);
+    // rang dans le bloc : plus long chemin depuis le haut du bloc
+    const rank = {}, left = {};
+    for (const n of nodes) left[n.id] = indeg[n.id];
+    const queue = nodes.filter((n) => !indeg[n.id]).map((n) => n.id);
+    for (const id of queue) rank[id] = 0;
+    while (queue.length) {
+      const id = queue.shift();
+      for (const b of out[id]) { rank[b] = Math.max(rank[b] || 0, rank[id] + 1); if (--left[b] === 0) queue.push(b); }
     }
-    // 1. rang = plus long chemin depuis le départ du groupe
-    const rank = {};
-    for (const id of topo) {
-      if (start.has(id)) { rank[id] = Math.max(rank[id] || 0, 0); }
-      if (rank[id] === undefined) continue;
-      for (const b of fout[id]) rank[b] = Math.max(rank[b] === undefined ? -Infinity : rank[b], rank[id] + 1);
-    }
-    // 2. branches qui rejoignent le cycle sans en partir (convergence) : placées juste au-dessus de l'élément rejoint
-    for (let k = topo.length - 1; k >= 0; k--) {
-      const id = topo[k];
-      if (rank[id] !== undefined) continue;
-      const rs = fout[id].map((b) => rank[b]).filter((r) => r !== undefined);
-      if (rs.length) rank[id] = Math.min(...rs) - 1;
-    }
-    // 3. ce qui reste (branches isolées) : à la suite de leur prédécesseur, sinon à leur hauteur actuelle
+    const anchor = {};
+    for (const n of nodes) if (!indeg[n.id]) { const c = findP(n.id); anchor[c] = anchor[c] === undefined ? n.y : Math.min(anchor[c], n.y); }
     const half = gap() / 2;
-    for (const id of topo) {
-      if (rank[id] !== undefined) continue;
-      const rs = fin[id].map((a) => rank[a]).filter((r) => r !== undefined);
-      rank[id] = rs.length ? Math.max(...rs) + 1 : Math.round((byId[id].y - anchorY[findP(id)]) / half);
+    for (const n of nodes) {
+      const c = findP(n.id);
+      if (rank[n.id] === undefined || anchor[c] === undefined || left[n.id] > 0) continue;   // boucle éventuelle : on ne touche pas
+      n.y = rnd(anchor[c] + rank[n.id] * half);
     }
-    for (const n of nodes) if (rank[n.id] === undefined) rank[n.id] = Math.round((n.y - anchorY[findP(n.id)]) / half);
-    for (const n of nodes) n.y = rnd(anchorY[findP(n.id)] + rank[n.id] * half);
   }
-  // Éléments reliés (liaisons dans les deux sens) à ceux de la liste
-  function groupOf(ids) {
-    const all = items(), seen = new Set(ids), stack = [...ids];
-    const links = all.filter((l) => l.t === 'link');
+  // Blocs (éléments face à face) contenant les éléments donnés
+  function blocksOf(ids) {
+    const all = items(), byId = {};
+    for (const n of all) if (n.t === 'step' || n.t === 'trans') byId[n.id] = n;
+    const rl = all.filter((l) => l.t === 'link' && rigid(l, byId));
+    const seen = new Set(ids), stack = [...ids];
     while (stack.length) {
       const id = stack.pop();
-      for (const l of links) {
+      for (const l of rl) {
         const o = l.a === id ? l.b : l.b === id ? l.a : null;
         if (o && !seen.has(o)) { seen.add(o); stack.push(o); }
       }
     }
-    return all.filter((i) => (i.t === 'step' || i.t === 'trans') && seen.has(i.id));
+    return Object.values(byId).filter((n) => seen.has(n.id));
+  }
+  // Aimant : un élément reposé presque sous (ou sur) un élément relié se cale dans sa colonne
+  function magnet(moved) {
+    const all = items(), byId = {};
+    for (const n of all) if (n.t === 'step' || n.t === 'trans') byId[n.id] = n;
+    const ids = new Set(moved.map((n) => n.id));
+    for (const n of moved) {
+      for (const l of all) {
+        if (l.t !== 'link' || l.up) continue;
+        const o = l.a === n.id ? byId[l.b] : l.b === n.id ? byId[l.a] : null;
+        if (!o || ids.has(o.id)) continue;
+        if (Math.abs(o.x - n.x) <= 14 && Math.abs(o.x - n.x) > 0) { n.x = o.x; break; }
+      }
+    }
+  }
+  // Emplacement libre (aucune étape ni transition à moins de 20 unités)
+  function freeAt(x, y, skip) {
+    return !items().some((n) => (n.t === 'step' || n.t === 'trans') && n.id !== skip && Math.abs(n.x - x) < 20 && Math.abs(n.y - y) < 20);
+  }
+  function freeSpot(cands) {
+    for (const c of cands) if (freeAt(c.x, c.y)) return c;
+    const c = cands[cands.length - 1];
+    let x = c.x;
+    while (!freeAt(x, c.y)) x += 60;
+    return { x, y: c.y };
+  }
+  // Transitions superposées (anciennes versions) : écartées pour être visibles
+  function repairOverlaps() {
+    const g = G();
+    if (!g) return 0;
+    let n = 0;
+    if (!g.v27) {                                    // versions précédentes : une liaison vers le haut était un renvoi
+      const byId = {};
+      for (const it of g.items) byId[it.id] = it;
+      for (const l of g.items) {
+        if (l.t !== 'link' || l.up || !byId[l.a] || !byId[l.b]) continue;
+        if (portTop(byId[l.b]).y <= portBot(byId[l.a]).y + 4) l.up = true;
+      }
+      g.v27 = true;
+    }
+    const nodes = g.items.filter((i) => i.t === 'step' || i.t === 'trans');
+    for (let i = 0; i < nodes.length; i++) {
+      for (let k = 0; k < i; k++) {
+        const a = nodes[i], b = nodes[k];
+        if (a.t === b.t && Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2) {
+          let x = a.x + 60;
+          while (!freeAt(x, a.y, a.id)) x += 60;
+          a.x = x; n++;
+          break;
+        }
+      }
+    }
+    return n;
   }
   function changeGap(dir) {
     const g = G();
@@ -329,7 +336,7 @@
     const outs = {}, ins = {};
     for (const l of links) { (outs[l.a] = outs[l.a] || []).push(l); (ins[l.b] = ins[l.b] || []).push(l); }
     const paths = {}, bars = [];
-    const isUp = (l) => portTop(byId[l.b]).y <= portBot(byId[l.a]).y + 4;
+    const isUp = (l) => !!l.up;                       // renvoi : liaison tracée vers le haut (mémorisée)
     for (const l of links) {
       const a = byId[l.a], b = byId[l.b];
       const p0 = portBot(a), p1 = portTop(b);
@@ -339,7 +346,7 @@
       if (isUp(l)) {                                  // reprise de séquence : par la gauche, flèche vers le haut
         const L = Math.min(a.x, b.x) - 60;
         const y0 = p0.y + (div ? barGap(a, 'div') + dA : 12), y1 = p1.y - (conv ? barGap(b, 'conv') + dB : 12);
-        paths[l.id] = { pts: [[p0.x, p0.y], [p0.x, y0], [L, y0], [L, y1], [p1.x, y1], [p1.x, p1.y]], up: true };
+        paths[l.id] = { pts: [[p0.x, p0.y], [p0.x, y0], [L, y0], [L, y1], [p1.x, y1], [p1.x, p1.y]], up: true, off: true };
         continue;
       }
       const ya = p0.y + barGap(a, 'div') + dA, yb = p1.y - barGap(b, 'conv') - dB;
@@ -349,7 +356,26 @@
       let pts;
       if (s0[0] === s1[0]) pts = [s0, s1];
       else { const m = rnd((s0[1] + s1[1]) / 2); pts = [s0, [s0[0], m], [s1[0], m], s1]; }
-      paths[l.id] = { pts };
+      paths[l.id] = { pts, off: Math.abs(a.x - b.x) >= 1 };      // off : pas face à face (flèche de sens)
+    }
+    // traits coudés au même niveau : légèrement décalés pour ne pas se recouvrir
+    const bands = {};
+    for (const id of Object.keys(paths)) {
+      const p = paths[id];
+      if (p.up || p.pts.length !== 4) continue;
+      const key = Math.round(p.pts[1][1] / 6);
+      (bands[key] = bands[key] || []).push(p);
+    }
+    for (const k of Object.keys(bands)) {
+      const ps = bands[k];
+      if (ps.length < 2) continue;
+      ps.sort((p, q) => p.pts[0][0] - q.pts[0][0]);
+      ps.forEach((p, i) => {
+        const dy = (i - (ps.length - 1) / 2) * 6;
+        const lo = Math.min(p.pts[0][1], p.pts[3][1]) + 3, hi = Math.max(p.pts[0][1], p.pts[3][1]) - 3;
+        const m = Math.max(lo, Math.min(hi, p.pts[1][1] + dy));
+        p.pts[1][1] = m; p.pts[2][1] = m;
+      });
     }
     // barres de divergence (sous la source) et de convergence (au-dessus de la cible)
     for (const id of Object.keys(outs)) {
@@ -387,6 +413,16 @@
       if (p.up) {                                     // flèche au milieu du segment montant
         const [x, y0] = p.pts[2], y1 = p.pts[3][1], ym = (y0 + y1) / 2;
         s += `<path d="M${x - 5} ${ym + 4} L${x} ${ym - 4} L${x + 5} ${ym + 4} Z" fill="${INK}"/>`;
+      } else if (p.off) {                             // liaison décalée : flèche vers le bas sur le plus long segment vertical
+        let best = null;
+        for (let k = 0; k < p.pts.length - 1; k++) {
+          const [x0, y0] = p.pts[k], [x1, y1] = p.pts[k + 1];
+          if (x0 === x1 && (!best || Math.abs(y1 - y0) > best.len)) best = { x: x0, ym: (y0 + y1) / 2, len: Math.abs(y1 - y0), dir: y1 >= y0 ? 1 : -1 };
+        }
+        if (best && best.len >= 10) {
+          const sg = best.dir;                          // la flèche suit le sens de parcours du segment
+          s += `<path d="M${best.x - 4.5} ${rnd(best.ym - 3.5 * sg)} L${best.x} ${rnd(best.ym + 3.5 * sg)} L${best.x + 4.5} ${rnd(best.ym - 3.5 * sg)} Z" fill="${INK}"/>`;
+        }
       }
     }
     for (const b of bars) {
@@ -599,9 +635,9 @@
   const linkExists = (a, b) => items().some((l) => l.t === 'link' && l.a === a && l.b === b);
   const outCount = (id) => items().filter((l) => l.t === 'link' && l.a === id).length;
   const inCount = (id) => items().filter((l) => l.t === 'link' && l.b === id).length;
-  // Trait bien vertical : l'élément du dessous se cale sous celui du dessus (sauf divergence / convergence)
+  // Trait bien vertical : l'élément du dessous se cale sous celui du dessus (sauf divergence / convergence, ou place prise)
   function alignBelow(a, b) {
-    if (b.y > a.y && outCount(a.id) <= 1 && inCount(b.id) <= 1) {
+    if (b.y > a.y && outCount(a.id) <= 1 && inCount(b.id) <= 1 && freeAt(a.x, b.y, b.id)) {
       const dx = a.x - b.x;
       b.x = a.x;
       return dx;
@@ -611,21 +647,25 @@
   // Relie a -> b ; deux étapes (ou deux transitions) reçoivent automatiquement l'élément intermédiaire
   function connect(a, b) {
     if (!a || !b || a.id === b.id) return false;
+    const half = gap() / 2;
     if (a.t === b.t) {
-      const down = b.y > a.y;
-      const mid = down
-        ? { x: a.x, y: snapV((a.y + b.y) / 2) }
-        : { x: a.x, y: snapV(a.y + STEP_H + 30) };
+      const down = b.y > a.y + 4;
+      // place libre : sous le départ s'il n'a pas encore de suite, sinon au-dessus de l'arrivée, sinon à côté
+      const cands = [];
+      if (!outCount(a.id)) cands.push({ x: a.x, y: a.y + half });
+      if (down && !inCount(b.id)) cands.push({ x: b.x, y: b.y - half });
+      cands.push(down ? { x: snapV((a.x + b.x) / 2), y: snapV((a.y + b.y) / 2) } : { x: a.x + 60, y: a.y + half });
+      const mid = freeSpot(cands);
       const m = a.t === 'step' ? { id: uid(), t: 'trans', x: mid.x, y: mid.y } : { id: uid(), t: 'step', x: mid.x, y: mid.y, n: nextStepNumber() };
       items().push(m);
       items().push({ id: uid(), t: 'link', a: a.id, b: m.id });
-      items().push({ id: uid(), t: 'link', a: m.id, b: b.id });
-      alignBelow(m, b);
+      items().push({ id: uid(), t: 'link', a: m.id, b: b.id, ...(down ? {} : { up: true }) });   // vers le haut : renvoi
       return true;
     }
     if (linkExists(a.id, b.id)) return false;
-    items().push({ id: uid(), t: 'link', a: a.id, b: b.id });
-    alignBelow(a, b);
+    const up = b.y <= a.y + 4;                       // liaison tracée vers le haut : renvoi
+    items().push({ id: uid(), t: 'link', a: a.id, b: b.id, ...(up ? { up: true } : {}) });
+    if (!up) alignBelow(a, b);
     return true;
   }
   function validPair(a, b) {
@@ -682,7 +722,7 @@
   }
   function editStep(st) {
     const v = window.prompt('Numéro de l’étape :', String(st.n));
-    if (v === null) return;
+    if (v === null || !String(v).trim()) return;
     const n = Math.round(Number(String(v).trim()));
     if (!Number.isSafeInteger(n) || n < 0) { window.alert('Entrez un nombre entier positif ou nul (0, 1, 2…).'); return; }
     mutate(() => { st.n = n; });
@@ -791,14 +831,17 @@
         }
         const additive = e.shiftKey || e.ctrlKey || e.metaKey || S.multi;
         if (h) {
-          if (additive) S.sels = S.sels.includes(h.id) ? S.sels.filter((x) => x !== h.id) : [...S.sels, h.id];
+          let click = null;
+          if (additive) { if (S.sels.includes(h.id)) click = 'toggle'; else S.sels = [...S.sels, h.id]; }
           else if (!S.sels.includes(h.id)) S.sels = [h.id];
-          // déplacement : toutes les étapes et transitions sélectionnées (non figées) bougent ensemble
-          const nodes = selItems().filter((i) => (i.t === 'step' || i.t === 'trans') && !i.locked);
-          if (S.sels.includes(h.id) && (h.t === 'step' || h.t === 'trans') && !h.locked) {
-            const grp = groupOf(nodes.map((n) => n.id));
-            S.drag = { mode: 'move', p0: p, orig: nodes.map((n) => [n.id, n.x]), origY: grp.map((n) => [n.id, n.y]), before: snap(), moved: false, cx: e.clientX, cy: e.clientY, hitId: h.id, collapse: !additive && S.sels.length > 1 };
-          } else if (h.locked && !additive) hint('Élément figé : il ne peut pas être déplacé.');
+          else if (S.sels.length > 1) click = 'collapse';
+          // Sélection simple : tout le bloc (éléments face à face) bouge ; sélection multiple / Maj : seulement les éléments choisis
+          const nodes = selItems().filter((i) => i.t === 'step' || i.t === 'trans');
+          const moving = additive ? nodes : blocksOf(nodes.map((n) => n.id));
+          if ((h.t === 'step' || h.t === 'trans') && S.sels.includes(h.id)) {
+            if (moving.some((n) => n.locked)) hint('Un élément figé fait partie de ce bloc : libérez-le pour le déplacer.');
+            else S.drag = { mode: 'move', p0: p, orig: moving.map((n) => [n.id, n.x, n.y]), single: additive, before: snap(), moved: false, cx: e.clientX, cy: e.clientY, hitId: h.id, click };
+          } else if (click === 'toggle') S.sels = S.sels.filter((x) => x !== h.id);
         } else if (additive) {
           S.drag = { mode: 'marquee', a: p, cur: p, add: true };
         } else { S.sels = []; pan(); }
@@ -841,9 +884,8 @@
       if (!d.moved && Math.hypot(e.clientX - d.cx, e.clientY - d.cy) < 3) return;
       d.moved = true;
       const dx = snapV(p.x - d.p0.x), dy = snapV(p.y - d.p0.y);
-      for (const [id, x] of d.orig) { const it = find(id); if (it) it.x = x + dx; }
-      for (const [id, y] of d.origY) { const it = find(id); if (it) it.y = y + dy; }
-      relayout();
+      for (const [id, x, y] of d.orig) { const it = find(id); if (it) { it.x = x + dx; it.y = y + dy; } }
+      if (d.single) relayout();
       sceneG.innerHTML = sceneSVG(); renderOverlay();
       return;
     }
@@ -856,9 +898,11 @@
     S.drag = null;
     if (!d) return;
     if (d.mode === 'move') {
+      if (d.moved) magnet(d.orig.map(([id]) => find(id)).filter(Boolean));
       relayout();
       if (snap() !== d.before) { pushUndo(d.before); save(); }
-      else if (d.collapse) S.sels = [d.hitId];          // simple clic dans une sélection : on ne garde que l'élément touché
+      else if (d.click === 'collapse') S.sels = [d.hitId];          // simple clic dans une sélection : on ne garde que l'élément touché
+      else if (d.click === 'toggle') S.sels = S.sels.filter((x) => x !== d.hitId);
       render(); updateUI();
       return;
     }
@@ -927,7 +971,7 @@
   /* ---------- Interface ---------- */
   const HINTS = {
     multi: 'Sélection multiple : touchez les éléments pour les ajouter ou les retirer ; glissez sur le fond pour tracer un rectangle de sélection. Déplacement de la vue : deux doigts, clic droit ou molette.',
-    select: 'Sélection : touchez un élément pour le choisir (Maj+clic : plusieurs), faites glisser une étape ou une transition pour la déplacer de côté ; la hauteur suit l’écart entre étapes. Double appui (ou Entrée) : modifier le texte, ou le numéro d’une étape. Glisser le fond déplace la vue ; molette ou pincement pour zoomer.',
+    select: 'Sélection : touchez un élément pour le choisir (Maj+clic : plusieurs), faites glisser une étape ou une transition pour déplacer son bloc (les éléments face à face, espacés de l’écart réglé). Pour sortir un élément de son bloc : Sélection multiple (ou Maj) puis glisser de côté. Double appui (ou Entrée) : modifier le texte, ou le numéro d’une étape. Glisser le fond déplace la vue ; molette ou pincement pour zoomer.',
     init: 'Étape initiale : touchez le plan pour la poser. Si une transition est sélectionnée juste au-dessus, elles sont reliées automatiquement.',
     step: 'Étape : touchez le plan pour la poser (numérotée automatiquement). Si une transition est sélectionnée au-dessus, elles sont reliées automatiquement : posez ainsi tout le cycle d’affilée.',
     trans: 'Transition : touchez le plan pour la poser. Si une étape est sélectionnée au-dessus, elles sont reliées automatiquement.',
@@ -1050,6 +1094,8 @@
     const id = s ? s.id : null;
     if (id !== S.schemaId) {
       S.schemaId = id; S.sels = []; S.drag = null; S.undo = []; S.redo = [];
+      const fixed = repairOverlaps();
+      if (fixed) { save(); setTimeout(() => hint(`${fixed} élément${fixed > 1 ? 's' : ''} superposé${fixed > 1 ? 's' : ''} (anciennes versions) écarté${fixed > 1 ? 's' : ''} sur le côté : supprimez ceux en trop.`), 50); }
       if (root.dataset.schMode === 'grafcet') requestAnimationFrame(() => { render(); fit(); updateUI(); });
       else { S.needFit = true; render(); updateUI(); }
     } else { render(); updateUI(); }
