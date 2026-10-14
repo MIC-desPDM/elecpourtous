@@ -1537,3 +1537,66 @@ if ('serviceWorker' in navigator) {
   try { const v = window.localStorage.getItem('ef_view'); if (tabs.some((t) => t.dataset.viewTab === v)) start = v; } catch (e) { /* ignoré */ }
   showView(start);
 })();
+
+
+/* ---------- Désignation MELEC : recherche d'un matériel par mots-clés ---------- */
+(function () {
+  const input = document.getElementById('des-search');
+  const out = document.getElementById('des-results');
+  if (!input || !out) return;
+  const norm = (t) => String(t).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[’']/g, ' ');
+  const escH = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const tables = document.querySelectorAll('#main-designation .des-table');
+  // Index : familles (1re lettre) avec leurs matériels, fonctions (2e lettre)
+  const fams = [...tables[0].tBodies[0].rows].map((r) => ({
+    letter: r.cells[0].textContent.trim(),
+    family: r.cells[1].textContent.trim(),
+    items: r.cells[2].textContent.split(/[,.]\s*/).map((x) => x.trim()).filter((x) => x && !/^aucun exemple/i.test(x)),
+  }));
+  const funcs = tables[1] ? [...tables[1].tBodies[0].rows].map((r) => ({ letter: r.cells[0].textContent.trim(), name: r.cells[1].textContent.trim() })) : [];
+
+  // Surligne les mots recherchés (sans tenir compte des accents ni des majuscules)
+  function mark(text, words) {
+    const n = norm(text);
+    const hits = new Array(text.length).fill(false);
+    for (const w of words) { let i = n.indexOf(w); while (i >= 0) { for (let k = i; k < i + w.length; k++) hits[k] = true; i = n.indexOf(w, i + 1); } }
+    let o = '', on = false;
+    for (let i = 0; i < text.length; i++) {
+      if (hits[i] !== on) { o += hits[i] ? '<mark>' : '</mark>'; on = hits[i]; }
+      o += escH(text[i]);
+    }
+    return o + (on ? '</mark>' : '');
+  }
+  const has = (text, words) => { const n = norm(text); return words.every((w) => n.includes(w)); };
+
+  function search() {
+    const words = norm(input.value).split(/\s+/).filter((w) => w.length > 0);
+    if (!words.length) { out.innerHTML = ''; return; }
+    const res = [];
+    for (const f of fams) {
+      const items = f.items.filter((it) => has(it, words));
+      const famHit = has(f.family, words);
+      if (items.length || famHit) res.push({ f, items, famHit });
+    }
+    // les matériels trouvés par leur nom passent en premier
+    res.sort((a, b) => (b.items.length ? 1 : 0) - (a.items.length ? 1 : 0));
+    const fn = funcs.filter((x) => has(x.name, words));
+    if (!res.length && !fn.length) {
+      out.innerHTML = '<p class="des-noresult">Aucun matériel ne correspond. Essayez un autre mot (ex. : contacteur, fusible, bouton, lampe…).</p>';
+      return;
+    }
+    let h = '';
+    for (const r of res) {
+      const list = (r.items.length ? r.items : r.f.items).map((it) => `<li>${mark(it, words)}</li>`).join('');
+      h += `<article class="des-hit"><span class="des-hit-letter">${escH(r.f.letter)}</span><div>` +
+        `<p class="des-hit-family">${mark(r.f.family, words)}</p>` +
+        (list ? `<ul class="des-hit-items">${list}</ul>` : '') + '</div></article>';
+    }
+    if (fn.length) {
+      h += '<p class="des-hit-sub">Deuxième lettre (fonction)</p>';
+      for (const x of fn) h += `<article class="des-hit des-hit-2"><span class="des-hit-letter">${escH(x.letter)}</span><div><p class="des-hit-family">${mark(x.name, words)}</p></div></article>`;
+    }
+    out.innerHTML = `<p class="des-count">${res.length + fn.length} résultat${res.length + fn.length > 1 ? 's' : ''}</p>` + h;
+  }
+  input.addEventListener('input', search);
+})();

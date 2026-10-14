@@ -204,15 +204,24 @@
       <p class="des-intro">Un repère se lit en trois parties : <strong>la première lettre</strong> (famille d’élément), <strong>la deuxième lettre</strong> (fonction) et <strong>un numéro</strong> choisi par l’utilisateur.</p>
       <div class="des-example" aria-label="Exemple de repère">
         <span class="des-code"><span class="des-c1">K</span><span class="des-c2">M</span><span class="des-c3">2</span></span>
-        <span><span class="des-c1">K</span> : contacteur · <span class="des-c2">M</span> : principal · <span class="des-c3">2</span> : 2<sup>e</sup> contacteur principal du circuit</span>
+        <span><span class="des-c1">K</span> : contacteur · <span class="des-c2">M</span> : Moteur · <span class="des-c3">2</span> : 2<sup>e</sup> contacteur principal du circuit</span>
       </div>
     </header>
+
+    <section class="des-search" aria-labelledby="des-search-title">
+      <h3 id="des-search-title" class="sr-only">Rechercher une désignation</h3>
+      <div class="search-wrap des-search-wrap">
+        <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
+        <input type="search" id="des-search" placeholder="Rechercher un matériel : disjoncteur, voyant, moteur…" aria-label="Rechercher la désignation d’un matériel électrique" autocomplete="off">
+      </div>
+      <div id="des-results" class="des-results" aria-live="polite"></div>
+    </section>
 
     <section class="des-block" aria-labelledby="des-t1">
       <h3 id="des-t1"><span class="des-step des-c1">1</span> La première lettre désigne une famille ou sorte d’élément</h3>
       <div class="des-table-wrap">
         <table class="des-table">
-          <thead><tr><th scope="col">Lettre</th><th scope="col">Famille d’éléments</th><th scope="col">Exemples</th></tr></thead>
+          <thead><tr><th scope="col">Lettre</th><th scope="col">Famille d’éléments</th><th scope="col">Matériel correspondant</th></tr></thead>
           <tbody>
             <tr><th scope="row" class="des-letter">A</th><td>Ensembles et sous-ensembles fonctionnels</td><td>Amplificateur, régulateur, automate programmable</td></tr>
             <tr><th scope="row" class="des-letter">B</th><td>Transducteurs : dispositifs transformant une grandeur non électrique en grandeur électrique, ou inversement</td><td>Thermostat, cellule photoélectrique, thermocouple, pressostat, détecteur photoélectrique</td></tr>
@@ -275,7 +284,7 @@
 
     <section class="des-block" aria-labelledby="des-t3">
       <h3 id="des-t3"><span class="des-step des-c3">3</span> La troisième partie est un numéro choisi par l’utilisateur</h3>
-      <p class="des-text">Exemple : <strong>KM2</strong> — <span class="des-c1">K</span> : contacteur, <span class="des-c2">M</span> : principal, <span class="des-c3">2</span> : 2<sup>e</sup> contacteur principal du circuit.</p>
+      <p class="des-text">Exemple : <strong>KM2</strong> — <span class="des-c1">K</span> : contacteur, <span class="des-c2">M</span> : Moteur, <span class="des-c3">2</span> : 2<sup>e</sup> contacteur principal du circuit.</p>
     </section>
   </main>
 
