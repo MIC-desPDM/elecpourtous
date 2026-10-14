@@ -36,7 +36,9 @@
   const S = {
     view: 'systeme',
     tool: 'select',
-    sel: null,
+    sels: [],               // éléments sélectionnés
+    multi: false,           // mode « sélection multiple » (écran tactile)
+    lockMarks: true,        // affichage des cadenas
     snap: true,
     cam: { x: 80, y: 60, k: 1 },
     drag: null,
@@ -50,7 +52,13 @@
     paths: {},              // tracés des liaisons (pour le clic)
     schemaId: null,
   };
+  // S.sel = l'élément sélectionné quand il est seul (sinon null)
+  Object.defineProperty(S, 'sel', {
+    get() { return S.sels.length === 1 ? S.sels[0] : null; },
+    set(v) { S.sels = v ? [v] : []; },
+  });
   try {
+    if (window.localStorage.getItem('ef_gf_locks') === '0') S.lockMarks = false;
     const v = window.localStorage.getItem('ef_gv');
     if (VIEWS.includes(v)) S.view = v;
     const r = JSON.parse(window.localStorage.getItem('ef_gf_ref') || 'null');
@@ -67,6 +75,9 @@
     return s.grafcet;
   }
   const items = () => { const g = G(); return g ? g.items : []; };
+  const GAP_DEF = 100, GAP_MIN = 60, GAP_MAX = 300;
+  const gap = () => { const g = G(); return g && num(g.gap) ? g.gap : GAP_DEF; };   // écart entre deux étapes (centre à centre)
+  const selItems = () => S.sels.map((id) => find(id)).filter(Boolean);
   const find = (id) => items().find((i) => i.id === id) || null;
   const txt = (id, view) => { const g = G(); return (g && g.tx[view || S.view][id]) || ''; };
   const save = () => { const api = API(); if (api) api.save(); };
@@ -78,16 +89,18 @@
     const ids = new Set();
     for (const it of raw.items) {
       if (!it || typeof it.id !== 'string') continue;
-      if (it.t === 'step' && num(it.x) && num(it.y)) g.items.push({ id: it.id, t: 'step', x: it.x, y: it.y, n: num(it.n) ? Math.max(0, Math.round(it.n)) : 0, ...(it.init ? { init: true } : {}) });
-      else if (it.t === 'trans' && num(it.x) && num(it.y)) g.items.push({ id: it.id, t: 'trans', x: it.x, y: it.y });
+      const lk = it.locked === true ? { locked: true } : {};
+      if (it.t === 'step' && num(it.x) && num(it.y)) g.items.push({ id: it.id, t: 'step', x: it.x, y: it.y, n: num(it.n) ? Math.max(0, Math.round(it.n)) : 0, ...(it.init ? { init: true } : {}), ...lk });
+      else if (it.t === 'trans' && num(it.x) && num(it.y)) g.items.push({ id: it.id, t: 'trans', x: it.x, y: it.y, ...lk });
       else continue;
       ids.add(it.id);
     }
     for (const it of raw.items) {
       if (!it || typeof it.id !== 'string') continue;
-      if (it.t === 'act' && ids.has(it.step)) { g.items.push({ id: it.id, t: 'act', step: it.step, ord: num(it.ord) ? it.ord : 0 }); ids.add(it.id); }
+      if (it.t === 'act' && ids.has(it.step)) { g.items.push({ id: it.id, t: 'act', step: it.step, ord: num(it.ord) ? it.ord : 0, ...(it.locked === true ? { locked: true } : {}) }); ids.add(it.id); }
       if (it.t === 'link' && ids.has(it.a) && ids.has(it.b)) g.items.push({ id: it.id, t: 'link', a: it.a, b: it.b });
     }
+    if (num(raw.gap)) g.gap = Math.max(GAP_MIN, Math.min(GAP_MAX, Math.round(raw.gap / 10) * 10));
     const tx = raw.tx || {};
     for (const v of VIEWS) {
       const src = tx[v] || {};
@@ -106,6 +119,7 @@
   function mutate(fn) {
     const before = snap();
     fn();
+    relayout();
     if (snap() === before) { render(); updateUI(); return; }
     pushUndo(before);
     save(); render(); updateUI();
@@ -114,11 +128,86 @@
     const api = API(), s = api && api.schema();
     if (!s) return;
     s.grafcet = JSON.parse(json);
-    if (S.sel && !find(S.sel)) S.sel = null;
+    S.sels = S.sels.filter((id) => find(id));
     save(); render(); updateUI();
   }
   function doUndo() { if (!S.undo.length) return; S.redo.push(snap()); restore(S.undo.pop()); }
   function doRedo() { if (!S.redo.length) return; S.undo.push(snap()); restore(S.redo.pop()); }
+
+  /* ---------- Disposition : l'écart vertical entre deux étapes est toujours le même ----------
+     Chaque élément reçoit un rang (plus long chemin depuis le début du cycle, sans compter les reprises
+     de séquence) ; sa hauteur vaut : hauteur du début + rang × (écart / 2). Étapes et transitions alternent,
+     donc deux étapes qui se suivent sont toujours séparées d'un écart. Seule la position horizontale est libre. */
+  function relayout() {
+    const g = G();
+    if (!g) return;
+    const nodes = g.items.filter((i) => i.t === 'step' || i.t === 'trans');
+    if (!nodes.length) return;
+    const byId = {};
+    for (const n of nodes) byId[n.id] = n;
+    const links = g.items.filter((l) => l.t === 'link' && byId[l.a] && byId[l.b]);
+    const out = {}, inc = {};
+    for (const n of nodes) { out[n.id] = []; inc[n.id] = 0; }
+    for (const l of links) { out[l.a].push(l); inc[l.b]++; }
+    // ordre de départ : étapes initiales, puis éléments sans prédécesseur, puis les autres (de haut en bas)
+    const byY = (a, b) => a.y - b.y || a.x - b.x;
+    const order = [
+      ...nodes.filter((n) => n.t === 'step' && n.init).sort(byY),
+      ...nodes.filter((n) => !inc[n.id]).sort(byY),
+      ...nodes.slice().sort(byY),
+    ];
+    // parcours en profondeur : une liaison vers un élément « en cours » est une reprise de séquence
+    const state = {}, back = new Set();
+    for (const r of order) {
+      if (state[r.id]) continue;
+      const stack = [[r.id, 0]];
+      state[r.id] = 1;
+      while (stack.length) {
+        const top = stack[stack.length - 1];
+        const ls = out[top[0]].slice().sort((a, b) => byY(byId[a.b], byId[b.b]));
+        if (top[1] < ls.length) {
+          const l = ls[top[1]++];
+          if (state[l.b] === 1) back.add(l.id);
+          else if (!state[l.b]) { state[l.b] = 1; stack.push([l.b, 0]); }
+        } else { state[top[0]] = 2; stack.pop(); }
+      }
+    }
+    const fwd = links.filter((l) => !back.has(l.id));
+    // rang = plus long chemin (ordre topologique)
+    const indeg = {}, rank = {};
+    for (const n of nodes) { indeg[n.id] = 0; rank[n.id] = 0; }
+    for (const l of fwd) indeg[l.b]++;
+    const queue = nodes.filter((n) => !indeg[n.id]).map((n) => n.id);
+    const fout = {};
+    for (const l of fwd) (fout[l.a] = fout[l.a] || []).push(l.b);
+    while (queue.length) {
+      const id = queue.shift();
+      for (const b of fout[id] || []) { rank[b] = Math.max(rank[b], rank[id] + 1); if (--indeg[b] === 0) queue.push(b); }
+    }
+    // groupes reliés : chacun garde la hauteur de son élément de départ
+    const parent = {};
+    const findP = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    for (const n of nodes) parent[n.id] = n.id;
+    for (const l of fwd) parent[findP(l.a)] = findP(l.b);
+    const anchor = {};
+    for (const r of order) {
+      const c = findP(r.id);
+      if (anchor[c] === undefined && rank[r.id] === 0) anchor[c] = r.y;
+    }
+    const half = gap() / 2;
+    for (const n of nodes) {
+      const c = findP(n.id);
+      if (anchor[c] === undefined) continue;
+      n.y = rnd(anchor[c] + rank[n.id] * half);
+    }
+  }
+  function changeGap(dir) {
+    const g = G();
+    if (!g) return;
+    const v = Math.max(GAP_MIN, Math.min(GAP_MAX, gap() + 10 * dir));
+    if (v === gap()) return;
+    mutate(() => { g.gap = v; });
+  }
 
   /* ---------- Désignation : vérification (point de vue Commande) ---------- */
   function letters() {
@@ -191,6 +280,8 @@
   const portTop = (n) => ({ x: n.x, y: n.t === 'step' ? n.y - STEP_H : n.y });
   const portBot = (n) => ({ x: n.x, y: n.t === 'step' ? n.y + STEP_H : n.y });
 
+  // Distance entre un élément et sa barre de divergence / convergence (un ET sous une transition laisse la place à la réceptivité)
+  const barGap = (n, kind) => (n.t === 'trans' ? Math.min(18, gap() / 4) : 10);
   // Tracé de toutes les liaisons : divergences / convergences en OU (trait simple) et en ET (trait double)
   function linkGeometry() {
     const list = items();
@@ -205,13 +296,15 @@
       const a = byId[l.a], b = byId[l.b];
       const p0 = portBot(a), p1 = portTop(b);
       const div = outs[l.a].length > 1, conv = ins[l.b].length > 1;
+      // barre double (ET) : on part du trait du bas, on arrive sur le trait du haut
+      const dA = div && a.t === 'trans' ? 3 : 0, dB = conv && b.t === 'trans' ? 3 : 0;
       if (isUp(l)) {                                  // reprise de séquence : par la gauche, flèche vers le haut
         const L = Math.min(a.x, b.x) - 60;
-        const y0 = p0.y + (div ? 10 : 12), y1 = p1.y - (conv ? 10 : 12);
+        const y0 = p0.y + (div ? barGap(a, 'div') + dA : 12), y1 = p1.y - (conv ? barGap(b, 'conv') + dB : 12);
         paths[l.id] = { pts: [[p0.x, p0.y], [p0.x, y0], [L, y0], [L, y1], [p1.x, y1], [p1.x, p1.y]], up: true };
         continue;
       }
-      const ya = p0.y + 10, yb = p1.y - 10;
+      const ya = p0.y + barGap(a, 'div') + dA, yb = p1.y - barGap(b, 'conv') - dB;
       const col = div ? b.x : (conv ? a.x : b.x);
       const s0 = div ? [col, ya] : [p0.x, p0.y];
       const s1 = conv ? [col, yb] : [p1.x, p1.y];
@@ -224,16 +317,18 @@
     for (const id of Object.keys(outs)) {
       const ls = outs[id];
       if (ls.length < 2) continue;
-      const a = byId[id], y = portBot(a).y + 10;
+      const a = byId[id], y = portBot(a).y + barGap(a, 'div');
       const xs = [a.x, ...ls.filter((l) => !isUp(l)).map((l) => byId[l.b].x), ...ls.filter(isUp).map(() => a.x)];
-      bars.push({ x0: Math.min(...xs), x1: Math.max(...xs), y, double: a.t === 'trans', stem: [a.x, portBot(a).y, y] });
+      const dbl = a.t === 'trans';
+      bars.push({ x0: Math.min(...xs), x1: Math.max(...xs), y, double: dbl, stem: [a.x, portBot(a).y, dbl ? y - 3 : y] });
     }
     for (const id of Object.keys(ins)) {
       const ls = ins[id];
       if (ls.length < 2) continue;
-      const b = byId[id], y = portTop(b).y - 10;
+      const b = byId[id], y = portTop(b).y - barGap(b, 'conv');
       const xs = [b.x, ...ls.filter((l) => !isUp(l)).map((l) => byId[l.a].x)];
-      bars.push({ x0: Math.min(...xs), x1: Math.max(...xs), y, double: b.t === 'trans', stem: [b.x, y, portTop(b).y] });
+      const dbl = b.t === 'trans';
+      bars.push({ x0: Math.min(...xs), x1: Math.max(...xs), y, double: dbl, stem: [b.x, dbl ? y + 3 : y, portTop(b).y] });
     }
     return { paths, bars };
   }
@@ -259,8 +354,8 @@
     for (const b of bars) {
       s += `<line x1="${b.stem[0]}" y1="${b.stem[1]}" x2="${b.stem[0]}" y2="${b.stem[2]}" stroke="${INK}" stroke-width="1.6"/>`;
       if (b.double) {
-        s += `<line x1="${b.x0 - 8}" y1="${b.y - 2}" x2="${b.x1 + 8}" y2="${b.y - 2}" stroke="${INK}" stroke-width="1.4"/>` +
-          `<line x1="${b.x0 - 8}" y1="${b.y + 2}" x2="${b.x1 + 8}" y2="${b.y + 2}" stroke="${INK}" stroke-width="1.4"/>`;
+        s += `<line x1="${b.x0 - 10}" y1="${b.y - 3}" x2="${b.x1 + 10}" y2="${b.y - 3}" stroke="${INK}" stroke-width="1.4"/>` +
+          `<line x1="${b.x0 - 10}" y1="${b.y + 3}" x2="${b.x1 + 10}" y2="${b.y + 3}" stroke="${INK}" stroke-width="1.4"/>`;
       } else s += `<line x1="${b.x0}" y1="${b.y}" x2="${b.x1}" y2="${b.y}" stroke="${INK}" stroke-width="1.6"/>`;
     }
     // étapes et actions
@@ -306,9 +401,8 @@
   function overlaySVG() {
     let o = '';
     const k = S.cam.k;
-    const it = S.sel ? find(S.sel) : null;
     const dash = `fill="none" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"`;
-    if (it) {
+    for (const it of selItems()) {
       if (it.t === 'step') o += `<rect x="${it.x - STEP_H - 4}" y="${it.y - STEP_H - 4}" width="${2 * STEP_H + 8}" height="${2 * STEP_H + 8}" ${dash}/>`;
       else if (it.t === 'trans') o += `<rect x="${it.x - TR_W - 4}" y="${it.y - 7}" width="${2 * TR_W + 8}" height="14" ${dash}/>`;
       else if (it.t === 'act') {
@@ -319,8 +413,14 @@
         o += `<polyline points="${S.paths[it.id].pts.map((q) => q.join(',')).join(' ')}" fill="none" stroke="${SEL}" stroke-opacity="0.45" stroke-width="7" stroke-linejoin="round"/>`;
       }
     }
-    // liaison en cours de tracé
+    // cadenas : un tiers de l'élément figé, sans dépasser sa largeur visible
+    if (S.lockMarks) for (const it of items()) if (it.locked) o += lockSVG(it);
+    // rectangle de sélection
     const d = S.drag;
+    if (d && d.mode === 'marquee' && d.cur) {
+      o += `<rect x="${Math.min(d.a.x, d.cur.x)}" y="${Math.min(d.a.y, d.cur.y)}" width="${Math.abs(d.cur.x - d.a.x)}" height="${Math.abs(d.cur.y - d.a.y)}" fill="${SEL}" fill-opacity="0.08" ${dash.replace('fill="none" ', '')}/>`;
+    }
+    // liaison en cours de tracé
     if (d && d.mode === 'link' && d.cur) {
       const a = find(d.a);
       if (a) o += `<line x1="${a.x}" y1="${a.y}" x2="${d.cur.x}" y2="${d.cur.y}" stroke="${SEL}" stroke-width="2" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
@@ -337,6 +437,23 @@
       }
     }
     return o;
+  }
+
+  function lockSVG(it) {
+    let x, y, size;
+    if (it.t === 'step') { x = it.x + STEP_H; y = it.y - STEP_H; size = Math.min(2 * STEP_H / 3, 2 * STEP_H); }
+    else if (it.t === 'trans') { x = it.x + TR_W; y = it.y; size = Math.min(2 * TR_W / 3, 14); }
+    else if (it.t === 'act') {
+      const st = find(it.step);
+      const b = st && actBoxes(st, S.view, S.ref && S.ref !== S.view).find((q) => q.a.id === it.id);
+      if (!b) return '';
+      x = b.x + b.w; y = b.y; size = Math.min(b.w / 3, b.h);
+    } else return '';
+    const sc = size / 20;
+    return `<g transform="translate(${rnd(x)} ${rnd(y)}) scale(${rnd(sc * 1000) / 1000})">` +
+      '<circle r="10" fill="#fff" fill-opacity="0.92" stroke="#d62828" stroke-width="1.2"/>' +
+      '<path d="M-3.6 -0.5 V-3.4 a3.6 3.6 0 0 1 7.2 0 V-0.5" fill="none" stroke="#d62828" stroke-width="1.9" stroke-linecap="round"/>' +
+      '<rect x="-5.4" y="-0.8" width="10.8" height="8" rx="1.6" fill="#d62828"/><circle cx="0" cy="3.1" r="1.25" fill="#fff"/></g>';
   }
 
   const sceneG = document.getElementById('gf-scene');
@@ -512,6 +629,7 @@
   function editText(id, fresh) {
     const it = find(id || S.sel);
     if (!it) return;
+    if (it.locked) { hint('Élément figé : libérez-le (bouton « Libérer ») pour le modifier.'); return; }
     if (it.t === 'step') { editStep(it); return; }
     if (it.t !== 'act' && it.t !== 'trans') return;
     const g = G();
@@ -527,17 +645,67 @@
     mutate(() => { st.n = n; });
   }
   function deleteSel() {
-    const it = S.sel ? find(S.sel) : null;
-    if (!it) return;
+    const list = selItems().filter((i) => !i.locked);
+    if (!list.length) return;
     mutate(() => {
       const g = G();
-      const gone = new Set([it.id]);
-      if (it.t === 'step') for (const a of actsOf(it.id)) gone.add(a.id);
+      const gone = new Set(list.map((i) => i.id));
+      for (const it of list) if (it.t === 'step') for (const a of actsOf(it.id)) gone.add(a.id);
       g.items = g.items.filter((i) => !gone.has(i.id) && !(i.t === 'link' && (gone.has(i.a) || gone.has(i.b))));
       for (const v of VIEWS) for (const k of gone) delete g.tx[v][k];
     });
-    S.sel = null;
+    S.sels = [];
     render(); updateUI();
+  }
+  // Dupliquer : étapes, transitions, leurs actions, les liaisons entre éléments copiés et les textes des 4 points de vue
+  function duplicateSel() {
+    const list = selItems();
+    if (!list.length) return;
+    const g = G();
+    const nodes = list.filter((i) => i.t === 'step' || i.t === 'trans');
+    // décalage vers la droite : largeur de la sélection (actions et textes compris) + une marge
+    let x0 = Infinity, x1 = -Infinity;
+    const withRef = S.ref && S.ref !== S.view;
+    for (const it of nodes) {
+      x0 = Math.min(x0, it.x - STEP_H);
+      if (it.t === 'step') { x1 = Math.max(x1, it.x + STEP_H); for (const b of actBoxes(it, S.view, withRef)) x1 = Math.max(x1, b.x + b.w); }
+      else x1 = Math.max(x1, it.x + TR_W + 10 + textW(txt(it.id) || ph('trans'), 12));
+    }
+    const DX = nodes.length ? Math.ceil((x1 - x0 + 60) / GRID) * GRID : 0;
+    const map = {}, copies = [];
+    mutate(() => {
+      let n = nextStepNumber();
+      for (const it of nodes.slice().sort((p, q) => p.y - q.y || p.x - q.x)) {        // numérotation de haut en bas
+        const c = { ...it, id: uid(), x: it.x + DX };
+        delete c.locked;
+        if (c.t === 'step') c.n = n++;
+        map[it.id] = c.id; copies.push(c);
+      }
+      const acts = [];
+      for (const it of nodes) if (it.t === 'step') for (const a of actsOf(it.id)) acts.push([a, map[it.id]]);
+      for (const a of list.filter((i) => i.t === 'act' && !map[i.step])) {          // action seule : copiée dans la même étape
+        const last = actsOf(a.step);
+        acts.push([{ ...a, ord: last[last.length - 1].ord + 1 }, a.step]);
+      }
+      for (const [a, stepId] of acts) { const c = { id: uid(), t: 'act', step: stepId, ord: a.ord }; map[a.id] = c.id; copies.push(c); }
+      for (const l of g.items) if (l.t === 'link' && map[l.a] && map[l.b]) copies.push({ id: uid(), t: 'link', a: map[l.a], b: map[l.b] });
+      g.items.push(...copies);
+      for (const v of VIEWS) for (const k of Object.keys(map)) if (g.tx[v][k]) g.tx[v][map[k]] = g.tx[v][k];
+    });
+    S.sels = copies.filter((c) => c.t !== 'link').map((c) => c.id);
+    render(); updateUI();
+  }
+  // Figer / libérer la sélection ; un élément figé ne peut plus être déplacé, modifié ni supprimé
+  function toggleLock() {
+    const list = selItems().filter((i) => i.t !== 'link');
+    if (!list.length) return;
+    const unlock = list.every((i) => i.locked);
+    mutate(() => { for (const it of list) { if (unlock) delete it.locked; else it.locked = true; } });
+  }
+  function toggleLockMarks() {
+    S.lockMarks = !S.lockMarks;
+    try { window.localStorage.setItem('ef_gf_locks', S.lockMarks ? '1' : '0'); } catch (e) { /* ignoré */ }
+    renderOverlay(); updateUI();
   }
   function copyFromRef() {
     if (!S.ref || S.ref === S.view) return;
@@ -578,9 +746,18 @@
           setTimeout(() => editText(h.id), 0);
           return;
         }
-        S.sel = h ? h.id : null;
-        if (h && (h.t === 'step' || h.t === 'trans')) S.drag = { mode: 'move', id: h.id, p0: p, ox: h.x, oy: h.y, before: snap(), moved: false, cx: e.clientX, cy: e.clientY };
-        else if (!h) pan();
+        const additive = e.shiftKey || e.ctrlKey || e.metaKey || S.multi;
+        if (h) {
+          if (additive) S.sels = S.sels.includes(h.id) ? S.sels.filter((x) => x !== h.id) : [...S.sels, h.id];
+          else if (!S.sels.includes(h.id)) S.sels = [h.id];
+          // déplacement : toutes les étapes et transitions sélectionnées (non figées) bougent ensemble
+          const nodes = selItems().filter((i) => (i.t === 'step' || i.t === 'trans') && !i.locked);
+          if (S.sels.includes(h.id) && (h.t === 'step' || h.t === 'trans') && !h.locked) {
+            S.drag = { mode: 'move', p0: p, orig: nodes.map((n) => [n.id, n.x, n.y]), before: snap(), moved: false, cx: e.clientX, cy: e.clientY, hitId: h.id, collapse: !additive && S.sels.length > 1 };
+          } else if (h.locked && !additive) hint('Élément figé : il ne peut pas être déplacé.');
+        } else if (additive) {
+          S.drag = { mode: 'marquee', a: p, cur: p, add: true };
+        } else { S.sels = []; pan(); }
         render(); updateUI();
         break;
       }
@@ -589,7 +766,8 @@
         break;
       case 'act': {
         const st = h && (h.t === 'step' ? h : h.t === 'act' ? find(h.step) : null);
-        if (st) addAction(st); else hint('Action : touchez une étape pour lui ajouter une action.');
+        if (st && st.locked) hint('Étape figée : libérez-la pour lui ajouter une action.');
+        else if (st) addAction(st); else hint('Action : touchez une étape pour lui ajouter une action.');
         break;
       }
       case 'link': {
@@ -618,13 +796,13 @@
     if (d.mode === 'move') {
       if (!d.moved && Math.hypot(e.clientX - d.cx, e.clientY - d.cy) < 3) return;
       d.moved = true;
-      const it = find(d.id);
-      if (!it) return;
-      it.x = snapV(d.ox + p.x - d.p0.x); it.y = snapV(d.oy + p.y - d.p0.y);
+      const dx = snapV(p.x - d.p0.x), dy = snapV(p.y - d.p0.y);
+      for (const [id, x, y] of d.orig) { const it = find(id); if (it) { it.x = x + dx; it.y = y + dy; } }
+      relayout();
       sceneG.innerHTML = sceneSVG(); renderOverlay();
       return;
     }
-    if (d.mode === 'link') { d.cur = p; renderOverlay(); }
+    if (d.mode === 'link' || d.mode === 'marquee') { d.cur = p; renderOverlay(); }
   }
   function onUp(e) {
     S.pointers.delete(e.pointerId);
@@ -633,7 +811,17 @@
     S.drag = null;
     if (!d) return;
     if (d.mode === 'move') {
+      relayout();
       if (snap() !== d.before) { pushUndo(d.before); save(); }
+      else if (d.collapse) S.sels = [d.hitId];          // simple clic dans une sélection : on ne garde que l'élément touché
+      render(); updateUI();
+      return;
+    }
+    if (d.mode === 'marquee') {
+      const p = toWorld(e);
+      const x0 = Math.min(d.a.x, p.x), x1 = Math.max(d.a.x, p.x), y0 = Math.min(d.a.y, p.y), y1 = Math.max(d.a.y, p.y);
+      const inside = items().filter((i) => (i.t === 'step' || i.t === 'trans') && i.x >= x0 && i.x <= x1 && i.y >= y0 && i.y <= y1).map((i) => i.id);
+      S.sels = [...new Set([...S.sels, ...inside])];
       render(); updateUI();
       return;
     }
@@ -652,6 +840,7 @@
     S.pointers.delete(e.pointerId);
     if (S.pointers.size < 2) S.gesture = null;
     if (S.drag && S.drag.mode === 'move') restore(S.drag.before);
+    if (S.drag && S.drag.mode === 'marquee') renderOverlay();
     S.drag = null;
   }
   svg.addEventListener('pointerdown', onDown);
@@ -678,15 +867,18 @@
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); doRedo(); return; }
-    if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); return; }
-    if (e.key === 'Delete' || e.key === 'Backspace') { if (S.sel) { e.preventDefault(); deleteSel(); } return; }
+    if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); S.sels = items().filter((i) => i.t !== 'link').map((i) => i.id); render(); updateUI(); return; }
+    if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel(); return; }
+    if (!mod && (e.key === 'l' || e.key === 'L')) { toggleLock(); return; }
+    if (e.key === 'Delete' || e.key === 'Backspace') { if (S.sels.length) { e.preventDefault(); deleteSel(); } return; }
     if (e.key === 'Enter' && S.sel) { e.preventDefault(); editText(S.sel); return; }
-    if (e.key === 'Escape') { if (S.drag) S.drag = null; else if (S.sel) S.sel = null; else setTool('select'); render(); updateUI(); }
+    if (e.key === 'Escape') { if (S.drag) S.drag = null; else if (S.sels.length) S.sels = []; else setTool('select'); render(); updateUI(); }
   });
 
   /* ---------- Interface ---------- */
   const HINTS = {
-    select: 'Sélection : touchez un élément pour le choisir, faites glisser une étape ou une transition pour la déplacer. Double appui (ou Entrée) : modifier le texte, ou le numéro d’une étape. Glisser le fond déplace la vue ; molette ou pincement pour zoomer.',
+    multi: 'Sélection multiple : touchez les éléments pour les ajouter ou les retirer ; glissez sur le fond pour tracer un rectangle de sélection. Déplacement de la vue : deux doigts, clic droit ou molette.',
+    select: 'Sélection : touchez un élément pour le choisir (Maj+clic : plusieurs), faites glisser une étape ou une transition pour la déplacer de côté ; la hauteur suit l’écart entre étapes. Double appui (ou Entrée) : modifier le texte, ou le numéro d’une étape. Glisser le fond déplace la vue ; molette ou pincement pour zoomer.',
     init: 'Étape initiale : touchez le plan pour la poser. Si une transition est sélectionnée juste au-dessus, elles sont reliées automatiquement.',
     step: 'Étape : touchez le plan pour la poser (numérotée automatiquement). Si une transition est sélectionnée au-dessus, elles sont reliées automatiquement : posez ainsi tout le cycle d’affilée.',
     trans: 'Transition : touchez le plan pour la poser. Si une étape est sélectionnée au-dessus, elles sont reliées automatiquement.',
@@ -705,17 +897,29 @@
     document.querySelectorAll('[data-gtool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.gtool === S.tool)));
     document.querySelectorAll('[data-gv-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.gvTab === S.view)));
     const it = S.sel ? find(S.sel) : null;
+    const list = selItems();
+    const nl = list.filter((i) => i.t !== 'link');
     $('#gf-undo').disabled = !S.undo.length;
     $('#gf-redo').disabled = !S.redo.length;
-    $('#gf-delete').disabled = !it;
-    $('#gf-edit').disabled = !it || it.t === 'link';
+    $('#gf-delete').disabled = !list.some((i) => !i.locked);
+    $('#gf-edit').disabled = !it || it.t === 'link' || !!it.locked;
+    $('#gf-dup').disabled = !nl.length;
+    $('#gf-lock').disabled = !nl.length;
+    $('#gf-lock').textContent = nl.length && nl.every((i) => i.locked) ? 'Libérer' : 'Figer';
+    $('#gf-lockmarks').textContent = S.lockMarks ? 'Masquer les cadenas' : 'Afficher les cadenas';
+    $('#gf-lockmarks').setAttribute('aria-pressed', String(!S.lockMarks));
+    $('#gf-multi').setAttribute('aria-pressed', String(S.multi && S.tool === 'select'));
+    $('#gf-gap-val').textContent = String(gap());
+    $('#gf-gap-m').disabled = gap() <= GAP_MIN;
+    $('#gf-gap-p').disabled = gap() >= GAP_MAX;
+    $('#gf-selcount').textContent = list.length > 1 ? list.length + ' éléments sélectionnés' : '';
     $('#gf-edit').textContent = it && it.t === 'step' ? 'Modifier le numéro' : 'Modifier le texte';
     $('#gf-ref').value = S.ref;
     $('#gf-ref-op').value = String(Math.round(S.refOp * 100));
     $('#gf-ref-op').disabled = !S.ref;
     $('#gf-copy').disabled = !S.ref || S.ref === S.view;
     $('#gf-snap').checked = S.snap;
-    let h = HINTS[S.tool] || '';
+    let h = (S.tool === 'select' && S.multi ? HINTS.multi : HINTS[S.tool]) || '';
     {
       const n = textTargets().filter((t) => textIssue(txt(t.id), t.kind, S.view)).length;
       if (n) h = `⚠ ${n} élément${n > 1 ? 's' : ''} à compléter ou à corriger (panneau « ! »). ` + h;
@@ -781,13 +985,22 @@
   $('#gf-ref').addEventListener('change', (e) => { S.ref = e.target.value; saveRef(); render(); updateUI(); });
   $('#gf-ref-op').addEventListener('input', (e) => { S.refOp = Number(e.target.value) / 100; saveRef(); render(); });
   $('#gf-copy').addEventListener('click', copyFromRef);
+  $('#gf-multi').addEventListener('click', () => {
+    if (S.tool !== 'select') { S.multi = true; setTool('select'); }
+    else { S.multi = !S.multi; updateUI(); }
+  });
+  $('#gf-dup').addEventListener('click', duplicateSel);
+  $('#gf-lock').addEventListener('click', toggleLock);
+  $('#gf-lockmarks').addEventListener('click', toggleLockMarks);
+  $('#gf-gap-m').addEventListener('click', () => changeGap(-1));
+  $('#gf-gap-p').addEventListener('click', () => changeGap(1));
 
   // Changement de projet : nouveau Grafcet, historique vidé, vue ajustée
   function onSchema() {
     const api = API(), s = api && api.schema();
     const id = s ? s.id : null;
     if (id !== S.schemaId) {
-      S.schemaId = id; S.sel = null; S.drag = null; S.undo = []; S.redo = [];
+      S.schemaId = id; S.sels = []; S.drag = null; S.undo = []; S.redo = [];
       if (root.dataset.schMode === 'grafcet') requestAnimationFrame(() => { render(); fit(); updateUI(); });
       else { S.needFit = true; render(); updateUI(); }
     } else { render(); updateUI(); }

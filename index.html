@@ -185,6 +185,7 @@
 
       <div class="sch-tools" role="toolbar" aria-label="Outils du Grafcet">
         <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="select" aria-pressed="true">Sélection</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" id="gf-multi" aria-pressed="false" title="Sélection multiple : un appui ajoute ou retire un élément ; glisser sur le fond trace un rectangle de sélection">Sélection multiple</button>
         <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="init" aria-pressed="false" title="Étape initiale (double cadre)">Étape initiale</button>
         <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="step" aria-pressed="false">Étape</button>
         <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="trans" aria-pressed="false">Transition</button>
@@ -200,11 +201,23 @@
         <button type="button" class="btn btn-ghost btn-sm" id="gf-zoom-in" aria-label="Zoomer">+</button>
         <button type="button" class="btn btn-ghost btn-sm" id="gf-fit">Ajuster</button>
         <span class="sch-sep"></span>
+        <span class="sch-selcount" id="gf-selcount" aria-live="polite"></span>
         <button type="button" class="btn btn-ghost btn-sm" id="gf-edit">Modifier le texte</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-dup" title="Dupliquer la sélection (Ctrl+D)">Dupliquer</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-lock" title="Figer ou libérer la sélection (L) : un élément figé ne peut plus être déplacé, modifié ni supprimé">Figer</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" id="gf-lockmarks" aria-pressed="false" title="Masquer ou afficher les cadenas (les éléments restent figés)">Masquer les cadenas</button>
         <button type="button" class="btn btn-danger btn-sm" id="gf-delete" title="Supprimer (Suppr)">Supprimer</button>
         <span class="sch-sep"></span>
         <button type="button" class="btn btn-ghost btn-sm" id="gf-png" title="Exporter ce point de vue en image PNG">PNG</button>
         <button type="button" class="btn btn-ghost btn-sm" id="gf-svgfile" title="Exporter ce point de vue en SVG">SVG</button>
+      </div>
+
+      <div class="sch-bgbar" role="toolbar" aria-label="Disposition">
+        <span class="sch-bglabel">Écart entre les étapes</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-gap-m" aria-label="Réduire l'écart entre les étapes">− écart</button>
+        <span class="sch-thval" id="gf-gap-val">100</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-gap-p" aria-label="Augmenter l'écart entre les étapes">+ écart</button>
+        <span class="sch-wallhint">Toutes les étapes sont espacées de la même distance.</span>
       </div>
 
       <div class="sch-bgbar" role="toolbar" aria-label="Calque de référence">
