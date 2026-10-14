@@ -959,11 +959,13 @@ dialog h2 {
 .des-meaning .des-sep { color: var(--text-faint); font-weight: 400; }
 
 /* Grafcet : à venir */
-.sch-grafcet-soon { display: none; }
+.sch-grafcet { display: none; }
+[data-sch-mode='grafcet'] .sch-grafcet { display: block; }
 [data-sch-mode='grafcet'] .sch-toolbars,
 [data-sch-mode='grafcet'] .sch-layout,
 [data-sch-mode='grafcet'] .sch-hint { display: none !important; }
-[data-sch-mode='grafcet'] .sch-grafcet-soon {
+.sch-gv-tabs { border-radius: var(--radius-md); }
+.sch-grafcet-soon {
   display: block; padding: 28px 20px; text-align: center;
   border: 1px dashed var(--border); border-radius: var(--radius-lg); background: var(--surface);
   font-size: 1rem; color: var(--text-muted);
@@ -992,3 +994,6 @@ dialog h2 {
 }
 .des-add input:focus { outline: none; border-color: var(--accent); }
 .des-empty { color: var(--text-faint); font-style: italic; }
+@media (max-width: 640px) {
+  .sch-gv-tabs { grid-template-columns: 1fr 1fr; }
+}

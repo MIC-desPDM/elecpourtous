@@ -1786,3 +1786,20 @@ if ('serviceWorker' in navigator) {
     search();
   });
 })();
+
+
+/* ---------- Schémas > Grafcet : quatre points de vue (à venir) ---------- */
+(function () {
+  const tabs = [...document.querySelectorAll('[data-gv-tab]')];
+  if (!tabs.length) return;
+  function show(k) {
+    if (!tabs.some((t) => t.dataset.gvTab === k)) k = tabs[0].dataset.gvTab;
+    tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.gvTab === k)));
+    document.querySelectorAll('[data-gv]').forEach((p) => { p.hidden = p.dataset.gv !== k; });
+    try { window.localStorage.setItem('ef_gv', k); } catch (e) { /* stockage indisponible */ }
+  }
+  tabs.forEach((t) => t.addEventListener('click', () => show(t.dataset.gvTab)));
+  let start = null;
+  try { start = window.localStorage.getItem('ef_gv'); } catch (e) { /* ignoré */ }
+  show(start);
+})();

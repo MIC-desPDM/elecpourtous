@@ -173,7 +173,19 @@
 
     </div>
 
-    <p class="sch-grafcet-soon" role="status"><strong>À venir</strong>La partie Grafcet sera disponible prochainement.</p>
+    <!-- Grafcet : quatre points de vue (à venir) -->
+    <div class="sch-grafcet">
+      <div class="sch-subtabs sch-gv-tabs" role="tablist" aria-label="Point de vue du Grafcet">
+        <button type="button" role="tab" class="sch-subtab" data-gv-tab="systeme" aria-selected="true" aria-controls="gv-systeme">Point de vue Système</button>
+        <button type="button" role="tab" class="sch-subtab" data-gv-tab="operative" aria-selected="false" aria-controls="gv-operative">Point de vue Opérative</button>
+        <button type="button" role="tab" class="sch-subtab" data-gv-tab="commande" aria-selected="false" aria-controls="gv-commande">Point de vue Commande</button>
+        <button type="button" role="tab" class="sch-subtab" data-gv-tab="automate" aria-selected="false" aria-controls="gv-automate">Point de vue Automate</button>
+      </div>
+      <section class="sch-grafcet-soon" id="gv-systeme" data-gv="systeme" role="tabpanel" aria-label="Point de vue Système"><strong>À venir</strong>Point de vue Système : cette partie sera disponible prochainement.</section>
+      <section class="sch-grafcet-soon" id="gv-operative" data-gv="operative" role="tabpanel" aria-label="Point de vue Opérative" hidden><strong>À venir</strong>Point de vue Opérative : cette partie sera disponible prochainement.</section>
+      <section class="sch-grafcet-soon" id="gv-commande" data-gv="commande" role="tabpanel" aria-label="Point de vue Commande" hidden><strong>À venir</strong>Point de vue Commande : cette partie sera disponible prochainement.</section>
+      <section class="sch-grafcet-soon" id="gv-automate" data-gv="automate" role="tabpanel" aria-label="Point de vue Automate" hidden><strong>À venir</strong>Point de vue Automate : cette partie sera disponible prochainement.</section>
+    </div>
 
     <div class="sch-layout">
       <aside class="sch-palette" id="sch-palette" aria-label="Bibliothèque de symboles"></aside>
