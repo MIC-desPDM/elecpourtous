@@ -133,14 +133,9 @@
     lockMarks: true,       // affichage des cadenas des éléments figés
     uw: 2,                 // épaisseur des prochains traits unifilaires
     usec: null,            // section (mm²) des prochains traits
-    showSec: true,         // affichage des sections
-    showMarks: true,       // affichage des marques de conducteurs
+    uhs: false,            // prochains traits : section masquée
+    uhm: false,            // prochains traits : marques des conducteurs masquées
   };
-  try {
-    const dsp = JSON.parse(window.localStorage.getItem('ef_uni_disp') || '{}');
-    if (dsp.sec === false) S.showSec = false;
-    if (dsp.marks === false) S.showMarks = false;
-  } catch (e) { /* ignoré */ }
   try { if (window.localStorage.getItem('ef_sch_locks') === '0') S.lockMarks = false; } catch (e) { /* ignoré */ }
   function resetHist() {
     S.hist = { implantation: { undo: [], redo: [] }, unifilaire: { undo: [], redo: [] } };
@@ -563,7 +558,7 @@
   // Largeur visible de l'objet (épaisseur d'un mur, d'un trait, d'une liaison ; petit côté d'un objet)
   function itemWidth(it) {
     if (it.t === 'wall') return it.th || WALL_TH;
-    if (it.t === 'uline') return Math.max(it.w || 2, S.showMarks && uniMarkList(it.m || {}).length ? UNI_HALF * 2 : 0);
+    if (it.t === 'uline') return Math.max(it.w || 2, !it.hm && uniMarkList(it.m || {}).length ? UNI_HALF * 2 : 0);
     if (it.t === 'link') return it.w || LINK_W;
     const b = itemBounds(it);
     return b ? Math.min(b[2] - b[0], b[3] - b[1]) : 20;
@@ -1954,6 +1949,7 @@
         return { id, t: 'uline', x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2, m: uniCleanMarks(it.m),
           ...(num(it.w) ? { w: Math.max(0.5, Math.min(12, it.w)) } : {}),
           ...(num(it.sec) && it.sec > 0 ? { sec: it.sec } : {}),
+          ...(it.hs === true ? { hs: true } : {}), ...(it.hm === true ? { hm: true } : {}),
           ...(typeof it.s1 === 'string' ? { s1: it.s1 } : {}), ...(typeof it.s2 === 'string' ? { s2: it.s2 } : {}) };
       case 'floor': {
         if (!Array.isArray(it.pts) || it.pts.length < 3 || it.pts.length > 200) return null;
@@ -2273,7 +2269,7 @@
     const d = uniSlashDir(ux, uy);
     const mx = (l.x1 + l.x2) / 2, my = (l.y1 + l.y2) / 2;
     // section : écrite à côté du trait, du côté opposé aux marques
-    if (S.showSec && typeof l.sec === 'number') {
+    if (!l.hs && typeof l.sec === 'number') {
       let nx = -uy, ny = ux;
       if (nx * d.x + ny * d.y > 0) { nx = -nx; ny = -ny; }
       const off = w / 2 + 9;
@@ -2281,7 +2277,7 @@
       const anchor = Math.abs(nx) < 0.35 ? 'middle' : nx > 0 ? 'start' : 'end';
       o += `<text x="${rnd(tx)}" y="${rnd(ty + 3.5 + ny * 3)}" font-size="10" font-weight="600" text-anchor="${anchor}" font-family="Arial, Helvetica, sans-serif" fill="#111">${fmtSection(l.sec)} mm²</text>`;
     }
-    const marks = S.showMarks ? uniMarkList(l.m || {}) : [];
+    const marks = l.hm ? [] : uniMarkList(l.m || {});
     if (!marks.length) return o;
     const sx = ux < 0 || (ux === 0 && uy < 0) ? -1 : 1;   // marques rangées de gauche à droite
     // positions le long du trait : un chiffre élargit l'écart avec la marque suivante
@@ -2299,7 +2295,8 @@
     return o;
   }
   function addULine(a, b) {
-    const it = { id: uid(), t: 'uline', x1: a.x, y1: a.y, x2: b.x, y2: b.y, m: clone(S.umark), ...(S.uw !== 2 ? { w: S.uw } : {}), ...(S.usec ? { sec: S.usec } : {}) };
+    const it = { id: uid(), t: 'uline', x1: a.x, y1: a.y, x2: b.x, y2: b.y, m: clone(S.umark), ...(S.uw !== 2 ? { w: S.uw } : {}), ...(S.usec ? { sec: S.usec } : {}),
+      ...(S.uhs ? { hs: true } : {}), ...(S.uhm ? { hm: true } : {}) };
     mutate(() => items().push(it));
   }
 
@@ -2454,6 +2451,7 @@
       '<div class="uni-row"><label class="uni-name" for="uni-sec">Section (mm²)</label>' +
       '<input type="text" class="uni-sec" id="uni-sec" inputmode="decimal" placeholder="ex. 1,5" autocomplete="off" aria-label="Section du conducteur en millimètres carrés"></div>' +
       '<h4 class="sch-subgroup">Affichage</h4>' +
+      '<p class="sch-note" id="uni-disp-scope"></p>' +
       '<label class="uni-row uni-check"><input type="checkbox" id="uni-show-sec"> <span class="uni-name">Afficher les sections</span></label>' +
       '<label class="uni-row uni-check"><input type="checkbox" id="uni-show-marks"> <span class="uni-name">Afficher les marques des conducteurs</span></label>' +
       '<p class="sch-note">Le nombre (sans limite) peut être tapé directement. Il est écrit à côté de la marque quand il dépasse 1 ; à 0, la marque disparaît.</p>' +
@@ -2504,10 +2502,22 @@
     if (ls.length) mutate(() => { for (const l of ls) { if (n) l.sec = n; else delete l.sec; } });
     else updateUI();
   }
+  // Afficher / masquer les sections ou les marques : sur les traits sélectionnés, sinon sur tous les traits
   function uniSetDisplay(which, on) {
-    if (which === 'sec') S.showSec = on; else S.showMarks = on;
-    try { window.localStorage.setItem('ef_uni_disp', JSON.stringify({ sec: S.showSec, marks: S.showMarks })); } catch (e) { /* ignoré */ }
-    render(); updateUI();
+    const k = which === 'sec' ? 'hs' : 'hm';
+    const sel = selULines();
+    const ls = sel.length ? sel : items().filter((i) => i.t === 'uline' && !i.locked);
+    if (!sel.length) S[which === 'sec' ? 'uhs' : 'uhm'] = !on;     // les prochains traits suivent ce choix
+    if (ls.length) mutate(() => { for (const l of ls) { if (on) delete l[k]; else l[k] = true; } });
+    else updateUI();
+  }
+  // État d'une case : celui des traits concernés ; à moitié cochée (indéterminée) s'ils diffèrent
+  function uniDisplayState(box, k, def) {
+    const sel = selULines();
+    const ls = sel.length ? sel : items().filter((i) => i.t === 'uline');
+    const shown = ls.filter((l) => !l[k]).length;
+    box.indeterminate = shown > 0 && shown < ls.length;
+    box.checked = ls.length ? shown === ls.length : !def;
   }
   function uniUpdateUI() {
     const ls = selULines();
@@ -2524,8 +2534,10 @@
     const sec = ls.length ? (typeof ls[0].sec === 'number' ? ls[0].sec : null) : S.usec;
     const si = $('#uni-sec');
     if (document.activeElement !== si) { si.value = sec ? fmtSection(sec) : ''; si.classList.remove('is-bad'); }
-    $('#uni-show-sec').checked = S.showSec;
-    $('#uni-show-marks').checked = S.showMarks;
+    uniDisplayState($('#uni-show-sec'), 'hs', S.uhs);
+    uniDisplayState($('#uni-show-marks'), 'hm', S.uhm);
+    const scope = selULines().length ? (selULines().length > 1 ? 'traits sélectionnés' : 'trait sélectionné') : 'tous les traits';
+    $('#uni-disp-scope').textContent = 'S’applique à : ' + scope;
     const tg = $('#uni-target');
     if (tg) tg.textContent = ls.length > 1 ? ls.length + ' traits sélectionnés' : ls.length ? 'Trait sélectionné' : 'Prochains traits';
   }
