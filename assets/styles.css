@@ -961,9 +961,12 @@ dialog h2 {
 /* Grafcet : à venir */
 .sch-grafcet { display: none; }
 [data-sch-mode='grafcet'] .sch-grafcet { display: block; }
-[data-sch-mode='grafcet'] .sch-toolbars,
+/* en Grafcet : on garde la barre du projet (choix du schéma, fichiers), le reste de l'éditeur de plan est masqué */
+[data-sch-mode='grafcet'] .sch-toolbars > :not(.sch-top),
+[data-sch-mode='grafcet'] #sch-png,
+[data-sch-mode='grafcet'] #sch-svgfile,
 [data-sch-mode='grafcet'] .sch-layout,
-[data-sch-mode='grafcet'] .sch-hint { display: none !important; }
+[data-sch-mode='grafcet'] > .sch-hint { display: none !important; }
 .sch-gv-tabs { border-radius: var(--radius-md); }
 .sch-grafcet-soon {
   display: block; padding: 28px 20px; text-align: center;
@@ -997,3 +1000,10 @@ dialog h2 {
 @media (max-width: 640px) {
   .sch-gv-tabs { grid-template-columns: 1fr 1fr; }
 }
+
+/* Éditeur de Grafcet */
+.sch-grafcet .sch-gv-tabs { margin-bottom: 10px; }
+.gf-wrap { height: calc(100dvh - 400px); min-height: 420px; }
+#gf-svg { width: 100%; height: 100%; display: block; max-width: none; touch-action: none; user-select: none; -webkit-user-select: none; background: #fff; }
+.gf-select { padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font-size: 0.8125rem; }
+@media (max-width: 800px) { .gf-wrap { height: 60dvh; } }

@@ -173,18 +173,73 @@
 
     </div>
 
-    <!-- Grafcet : quatre points de vue (à venir) -->
+    <!-- Grafcet : un seul cycle (étapes, transitions, liaisons) commun aux quatre points de vue ;
+         seuls les textes (actions, réceptivités) changent d'un point de vue à l'autre. -->
     <div class="sch-grafcet">
       <div class="sch-subtabs sch-gv-tabs" role="tablist" aria-label="Point de vue du Grafcet">
-        <button type="button" role="tab" class="sch-subtab" data-gv-tab="systeme" aria-selected="true" aria-controls="gv-systeme">Point de vue Système</button>
-        <button type="button" role="tab" class="sch-subtab" data-gv-tab="operative" aria-selected="false" aria-controls="gv-operative">Point de vue Opérative</button>
-        <button type="button" role="tab" class="sch-subtab" data-gv-tab="commande" aria-selected="false" aria-controls="gv-commande">Point de vue Commande</button>
-        <button type="button" role="tab" class="sch-subtab" data-gv-tab="automate" aria-selected="false" aria-controls="gv-automate">Point de vue Automate</button>
+        <button type="button" role="tab" class="sch-subtab" data-gv-tab="systeme" aria-selected="true">Point de vue Système</button>
+        <button type="button" role="tab" class="sch-subtab" data-gv-tab="operative" aria-selected="false">Point de vue Opérative</button>
+        <button type="button" role="tab" class="sch-subtab" data-gv-tab="commande" aria-selected="false">Point de vue Commande</button>
+        <button type="button" role="tab" class="sch-subtab" data-gv-tab="automate" aria-selected="false">Point de vue Automate</button>
       </div>
-      <section class="sch-grafcet-soon" id="gv-systeme" data-gv="systeme" role="tabpanel" aria-label="Point de vue Système"><strong>À venir</strong>Point de vue Système : cette partie sera disponible prochainement.</section>
-      <section class="sch-grafcet-soon" id="gv-operative" data-gv="operative" role="tabpanel" aria-label="Point de vue Opérative" hidden><strong>À venir</strong>Point de vue Opérative : cette partie sera disponible prochainement.</section>
-      <section class="sch-grafcet-soon" id="gv-commande" data-gv="commande" role="tabpanel" aria-label="Point de vue Commande" hidden><strong>À venir</strong>Point de vue Commande : cette partie sera disponible prochainement.</section>
-      <section class="sch-grafcet-soon" id="gv-automate" data-gv="automate" role="tabpanel" aria-label="Point de vue Automate" hidden><strong>À venir</strong>Point de vue Automate : cette partie sera disponible prochainement.</section>
+
+      <div class="sch-tools" role="toolbar" aria-label="Outils du Grafcet">
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="select" aria-pressed="true">Sélection</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="init" aria-pressed="false" title="Étape initiale (double cadre)">Étape initiale</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="step" aria-pressed="false">Étape</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="trans" aria-pressed="false">Transition</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="act" aria-pressed="false" title="Cliquez sur une étape pour lui ajouter une action">Action</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="link" aria-pressed="false" title="Faites glisser d'une étape vers une transition, ou d'une transition vers une étape">Liaison</button>
+        <span class="sch-sep"></span>
+        <label class="sch-snap"><input type="checkbox" id="gf-snap" checked> Grille magnétique</label>
+        <span class="sch-sep"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-undo" title="Annuler (Ctrl+Z)">Annuler</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-redo" title="Rétablir (Ctrl+Y)">Rétablir</button>
+        <span class="sch-sep"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-zoom-out" aria-label="Dézoomer">−</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-zoom-in" aria-label="Zoomer">+</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-fit">Ajuster</button>
+        <span class="sch-sep"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-edit">Modifier le texte</button>
+        <button type="button" class="btn btn-danger btn-sm" id="gf-delete" title="Supprimer (Suppr)">Supprimer</button>
+        <span class="sch-sep"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-png" title="Exporter ce point de vue en image PNG">PNG</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-svgfile" title="Exporter ce point de vue en SVG">SVG</button>
+      </div>
+
+      <div class="sch-bgbar" role="toolbar" aria-label="Calque de référence">
+        <span class="sch-bglabel">Calque</span>
+        <label class="sch-snap">Afficher en transparence
+          <select id="gf-ref" class="gf-select">
+            <option value="">Aucun</option>
+            <option value="systeme">Point de vue Système</option>
+            <option value="operative">Point de vue Opérative</option>
+            <option value="commande">Point de vue Commande</option>
+            <option value="automate">Point de vue Automate</option>
+          </select>
+        </label>
+        <label class="sch-snap">Opacité <input type="range" id="gf-ref-op" min="15" max="90" step="5" value="45"></label>
+        <span class="sch-sep"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-copy" title="Recopie les textes du calque dans les cases encore vides de ce point de vue">Recopier le calque dans les cases vides</button>
+      </div>
+
+      <div class="sch-canvas-wrap gf-wrap">
+        <svg id="gf-svg" role="img" aria-label="Zone de dessin du Grafcet">
+          <defs>
+            <pattern id="gf-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+              <circle cx="0" cy="0" r="1.1" fill="#c3c9d4"/><circle cx="20" cy="0" r="1.1" fill="#c3c9d4"/>
+              <circle cx="0" cy="20" r="1.1" fill="#c3c9d4"/><circle cx="20" cy="20" r="1.1" fill="#c3c9d4"/>
+            </pattern>
+            <marker id="gf-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#222"/></marker>
+          </defs>
+          <g id="gf-world">
+            <rect x="-20000" y="-20000" width="40000" height="40000" fill="url(#gf-grid)"></rect>
+            <g id="gf-scene"></g>
+            <g id="gf-overlay"></g>
+          </g>
+        </svg>
+      </div>
+      <p class="sch-hint" id="gf-hint"></p>
     </div>
 
     <div class="sch-layout">
@@ -393,6 +448,7 @@
   <script defer="" src="assets/schemas-symbols.js"></script>
   <script defer="" src="assets/schemas-materials.js"></script>
   <script defer="" src="assets/schemas.js"></script>
+  <script defer="" src="assets/grafcet.js"></script>
 
 
 </body></html>

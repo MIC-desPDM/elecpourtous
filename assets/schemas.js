@@ -1821,6 +1821,7 @@
     render();
     updateUI();
     save();
+    document.dispatchEvent(new Event('sch:schema'));      // le Grafcet suit le projet ouvert
   }
 
   /* ---------- Fond de plan (image) ---------- */
@@ -1921,7 +1922,7 @@
   function saveFile() {
     const s = schema();
     const bgData = s.bg ? bgGet(s.id) : null;
-    const data = { app: 'electroformules-schema', version: 1, schema: { name: s.name, items: s.items, ...(s.uni && s.uni.length ? { uni: s.uni } : {}), ...(bgData ? { bg: { ...s.bg, data: bgData } } : {}) } };
+    const data = { app: 'electroformules-schema', version: 1, schema: { name: s.name, items: s.items, ...(s.uni && s.uni.length ? { uni: s.uni } : {}), ...(s.grafcet ? { grafcet: s.grafcet } : {}), ...(bgData ? { bg: { ...s.bg, data: bgData } } : {}) } };
     download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), slug(s.name) + '.schema.json');
   }
 
@@ -1983,6 +1984,7 @@
         if (Array.isArray(data.schema.uni)) {
           s.uni = data.schema.uni.map((raw) => { const c = cleanItem(raw && !raw.t ? { ...raw, t: 'uline' } : raw); if (c && raw && raw.locked === true) c.locked = true; return c; }).filter(Boolean);
         }
+        if (data.schema.grafcet && window.GrafcetEditor) s.grafcet = window.GrafcetEditor.clean(data.schema.grafcet);
         const rb = data.schema.bg;
         if (rb && typeof rb.data === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(rb.data) &&
             [rb.x, rb.y, rb.w, rb.h].every(num) && rb.w > 0 && rb.h > 0) {
@@ -2108,6 +2110,7 @@
       const c = newSchema((s.name + ' (copie)').slice(0, 60));
       c.items = clone(s.items);
       if (s.uni) c.uni = clone(s.uni);
+      if (s.grafcet) c.grafcet = clone(s.grafcet);
       if (s.bg && bgGet(s.id) && bgSet(c.id, bgGet(s.id))) c.bg = clone(s.bg);
       openSchema(c.id, false);
     });
@@ -2171,7 +2174,8 @@
     root.querySelectorAll('[data-sch-subtab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.schSubtab === mode)));
     try { window.localStorage.setItem('ef_sch_mode', mode); } catch (e) { /* stockage indisponible */ }
     S.drag = null; S.draft = null; S.space = false;
-    if (mode === 'grafcet') return;                // Grafcet : à venir, l'éditeur est masqué
+    document.dispatchEvent(new Event('sch:mode'));
+    if (mode === 'grafcet') return;                // Grafcet : éditeur à part (grafcet.js)
     const ro = mode === 'unifilaire';
     if (ro !== !!S.readonly) {
       S.readonly = ro;
@@ -2558,10 +2562,11 @@
       if (S.readonly) uniSync();
       refreshSelect();
       // l'ajustement a besoin des dimensions réelles : on attend l'affichage
-      requestAnimationFrame(() => { if (!(s && s.view)) fitView(); render(); updateUI(); });
+      requestAnimationFrame(() => { if (!(s && s.view)) fitView(); render(); updateUI(); document.dispatchEvent(new Event('sch:schema')); });
     } else {
       render();
       updateUI();
+      document.dispatchEvent(new Event('sch:shown'));
     }
   }
 
@@ -2570,6 +2575,8 @@
   window.SchemasEditor = {
     show,
     setMode,
+    // accès au projet ouvert (utilisé par l'éditeur de Grafcet)
+    api: { schema: () => (ready ? schema() : null), save: () => save(), mode: () => root.dataset.schMode },
     // utilitaires exposés pour les tests
     _state: S, _db: () => db, _exportSVG: exportSVGString, _applyBackground: applyBackground, _wallPoints: wallPoints, _arcInfo: arcInfo, _bgGet: bgGet, _handleBgFile: handleBgFile,
   };
