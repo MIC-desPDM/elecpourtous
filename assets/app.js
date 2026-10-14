@@ -1539,6 +1539,93 @@ if ('serviceWorker' in navigator) {
 })();
 
 
+/* ---------- Désignation MELEC : matériels correspondants modifiables ----------
+   La liste d'origine reste dans la page ; les ajouts et retraits sont enregistrés sur l'appareil
+   (clé « ef_des_mat » : { add: { lettre: [...] }, del: { lettre: [...] } }). */
+(function () {
+  const table = document.querySelector('#main-designation .des-table');
+  const btn = document.getElementById('des-edit');
+  if (!table || !btn) return;
+  const KEY = 'ef_des_mat';
+  const escH = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+  let mods = { add: {}, del: {} };
+  try { const d = JSON.parse(window.localStorage.getItem(KEY) || 'null'); if (d && d.add && d.del) mods = d; } catch (e) { /* ignoré */ }
+  const saveMods = () => { try { window.localStorage.setItem(KEY, JSON.stringify(mods)); } catch (e) { /* stockage indisponible */ } };
+
+  const rows = [...table.tBodies[0].rows].map((r) => ({
+    letter: r.cells[0].textContent.trim(),
+    cell: r.cells[2],
+    // liste d'origine (« Aucun exemple précisé » n'est pas un matériel)
+    orig: r.cells[2].textContent.split(/[,.]\s*/).map((x) => x.trim()).filter((x) => x && !/^aucun exemple/i.test(x)),
+  }));
+  const itemsOf = (r) => {
+    const del = mods.del[r.letter] || [];
+    return r.orig.filter((x) => !del.some((d) => same(d, x))).concat(mods.add[r.letter] || []);
+  };
+
+  function draw() {
+    for (const r of rows) {
+      const added = mods.add[r.letter] || [];
+      const list = itemsOf(r);
+      const chips = list.map((x, i) =>
+        `<span class="des-mat${added.some((a) => same(a, x)) ? ' is-added' : ''}" data-item="${escH(x)}">${escH(x)}` +
+        `<button type="button" class="des-mat-x" data-del="${escH(x)}" aria-label="Retirer ${escH(x)}">×</button></span>` +
+        (i < list.length - 1 ? '<span class="des-sepc">, </span>' : '')).join('');
+      r.cell.innerHTML = `<span class="des-mats">${chips || '<span class="des-empty">Aucun matériel</span>'}</span>` +
+        `<form class="des-add" data-letter="${r.letter}"><input type="text" maxlength="80" placeholder="Nouveau matériel (${r.letter})" aria-label="Nouveau matériel pour la lettre ${r.letter}">` +
+        '<button type="submit" class="btn btn-ghost btn-sm">Ajouter</button></form>';
+    }
+    const changed = Object.values(mods.add).some((a) => a.length) || Object.values(mods.del).some((a) => a.length);
+    document.getElementById('des-reset').disabled = !changed;
+    document.dispatchEvent(new Event('des:materials'));
+  }
+
+  function setEditing(on) {
+    table.classList.toggle('des-editing', on);
+    btn.setAttribute('aria-pressed', String(on));
+    btn.textContent = on ? 'Terminer' : 'Modifier les matériels';
+    document.getElementById('des-reset').hidden = !on;
+    document.getElementById('des-edit-note').hidden = !on;
+  }
+
+  table.addEventListener('click', (e) => {
+    const x = e.target.closest('[data-del]');
+    if (!x) return;
+    const letter = x.closest('tr').cells[0].textContent.trim(), item = x.dataset.del;
+    const add = mods.add[letter] || [];
+    const i = add.findIndex((a) => same(a, item));
+    if (i >= 0) add.splice(i, 1);                       // matériel ajouté : simplement retiré
+    else (mods.del[letter] = mods.del[letter] || []).push(item);
+    saveMods(); draw();
+  });
+  table.addEventListener('submit', (e) => {
+    const f = e.target.closest('.des-add');
+    if (!f) return;
+    e.preventDefault();
+    const inp = f.querySelector('input');
+    const v = inp.value.replace(/[,.;]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!v) return;
+    const letter = f.dataset.letter;
+    const r = rows.find((q) => q.letter === letter);
+    if (itemsOf(r).some((x) => same(x, v))) { inp.select(); return; }      // déjà présent
+    const del = mods.del[letter] || [];
+    const di = del.findIndex((d) => same(d, v));
+    if (di >= 0) del.splice(di, 1);                                      // matériel d'origine retiré : on le remet
+    else (mods.add[letter] = mods.add[letter] || []).push(v);
+    saveMods(); draw();
+    const again = table.querySelector(`.des-add[data-letter="${letter}"] input`);
+    if (again) again.focus();
+  });
+  btn.addEventListener('click', () => setEditing(btn.getAttribute('aria-pressed') !== 'true'));
+  document.getElementById('des-reset').addEventListener('click', () => {
+    if (!window.confirm('Revenir à la liste d’origine des matériels ? Vos ajouts et retraits seront effacés.')) return;
+    mods = { add: {}, del: {} };
+    saveMods(); draw();
+  });
+  draw();
+})();
+
 /* ---------- Désignation MELEC : construction d'un repère par mots-clés ----------
    Saisie : « matériel - fonction - numéro » (groupes séparés par « - »).
    1er groupe -> 1re lettre (familles et matériels du tableau ①), 2e groupe -> 2e lettre (fonctions du tableau ②),
@@ -1550,11 +1637,16 @@ if ('serviceWorker' in navigator) {
   const norm = (t) => String(t).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[’']/g, ' ');
   const escH = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const tables = document.querySelectorAll('#main-designation .des-table');
-  const fams = [...tables[0].tBodies[0].rows].map((r) => ({
-    letter: r.cells[0].textContent.trim(),
-    name: r.cells[1].textContent.trim(),
-    items: r.cells[2].textContent.split(/[,.]\s*/).map((x) => x.trim()).filter((x) => x && !/^aucun exemple/i.test(x)),
-  }));
+  // Familles et matériels lus dans le tableau ① (relus à chaque recherche : la liste est modifiable)
+  let fams = [];
+  const readFams = () => {
+    fams = [...tables[0].tBodies[0].rows].map((r) => ({
+      letter: r.cells[0].textContent.trim(),
+      name: r.cells[1].textContent.trim(),
+      items: [...r.cells[2].querySelectorAll('[data-item]')].map((x) => x.dataset.item),
+    }));
+  };
+  readFams();
   // Mots supplémentaires reconnus pour la 2e lettre (aucun pour l'instant)
   const ALIAS2 = {};
   const funcs = tables[1] ? [...tables[1].tBodies[0].rows].map((r) => {
@@ -1625,6 +1717,7 @@ if ('serviceWorker' in navigator) {
 
   const picks = {};        // choix faits parmi les autres lettres possibles, par groupe
   function search() {
+    readFams();
     const raw = input.value;
     if (!raw.trim()) { out.innerHTML = ''; return; }
     if (!raw.includes('-')) { const r = reverse(raw); if (r) { out.innerHTML = r; return; } }
@@ -1685,6 +1778,7 @@ if ('serviceWorker' in navigator) {
     out.innerHTML = h;
   }
   input.addEventListener('input', search);
+  document.addEventListener('des:materials', search);      // liste des matériels modifiée
   out.addEventListener('click', (e) => {
     const b = e.target.closest('.des-alt');
     if (!b) return;

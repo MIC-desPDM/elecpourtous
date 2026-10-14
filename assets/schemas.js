@@ -2134,7 +2134,7 @@
   }
 
   function onKey(e) {
-    if (root.hidden) return;
+    if (root.hidden || root.dataset.schMode === 'grafcet') return;
     const tag = (e.target && e.target.tagName) || '';
     if (/INPUT|SELECT|TEXTAREA/.test(tag)) return;
     const mod = e.ctrlKey || e.metaKey;
@@ -2162,7 +2162,7 @@
   }
 
   /* ---------- Sous-parties : Implantation / Unifilaire ---------- */
-  const MODES = ['implantation', 'unifilaire'];
+  const MODES = ['implantation', 'unifilaire', 'grafcet'];
   const UNI_TOOLS = ['select', 'uline', 'jbox', 'text', 'bg'];
   const IMPL_TOOLS = ['select', 'wall', 'room', 'floor', 'circle', 'square', 'triangle', 'door', 'window', 'text', 'link', 'place', 'bg'];
   function setMode(mode) {
@@ -2170,6 +2170,8 @@
     root.dataset.schMode = mode;
     root.querySelectorAll('[data-sch-subtab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.schSubtab === mode)));
     try { window.localStorage.setItem('ef_sch_mode', mode); } catch (e) { /* stockage indisponible */ }
+    S.drag = null; S.draft = null; S.space = false;
+    if (mode === 'grafcet') return;                // Grafcet : à venir, l'éditeur est masqué
     const ro = mode === 'unifilaire';
     if (ro !== !!S.readonly) {
       S.readonly = ro;
@@ -2179,8 +2181,8 @@
       if (!allowed.includes(S.tool)) { S.tool = 'select'; S.placeKey = null; }
       if (ro && ready) uniSync();
       const pal = $('#sch-palette'); if (pal) pal.scrollTop = 0;   // la palette change de contenu : retour en haut
-      if (ready) { render(); updateUI(); }
     }
+    if (ready) requestAnimationFrame(() => { render(); updateUI(); });   // la zone de dessin a pu changer de taille
   }
   root.querySelectorAll('[data-sch-subtab]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.schSubtab)));
   let startMode = 'implantation';

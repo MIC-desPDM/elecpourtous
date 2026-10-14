@@ -71,6 +71,7 @@
     <div class="sch-subtabs" role="tablist" aria-label="Type de schéma">
       <button type="button" role="tab" class="sch-subtab" data-sch-subtab="implantation" aria-selected="true">Schémas d'Implantation</button>
       <button type="button" role="tab" class="sch-subtab" data-sch-subtab="unifilaire" aria-selected="false">Schémas Unifilaire</button>
+      <button type="button" role="tab" class="sch-subtab" data-sch-subtab="grafcet" aria-selected="false">Grafcet</button>
     </div>
 
     <!-- Outils communs aux deux sous-parties : les éléments « impl-only » n'apparaissent qu'en implantation,
@@ -172,6 +173,8 @@
 
     </div>
 
+    <p class="sch-grafcet-soon" role="status"><strong>À venir</strong>La partie Grafcet sera disponible prochainement.</p>
+
     <div class="sch-layout">
       <aside class="sch-palette" id="sch-palette" aria-label="Bibliothèque de symboles"></aside>
       <div class="sch-canvas-wrap">
@@ -218,6 +221,11 @@
 
     <section class="des-block" aria-labelledby="des-t1">
       <h3 id="des-t1"><span class="des-step des-c1">1</span> La première lettre désigne une famille ou sorte d’élément</h3>
+      <div class="des-edit-bar">
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" id="des-edit" aria-pressed="false" title="Ajouter ou retirer des matériels dans la colonne « Matériel correspondant »">Modifier les matériels</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="des-reset" title="Revenir à la liste d’origine des matériels" hidden>Rétablir la liste d’origine</button>
+        <span class="des-edit-note" id="des-edit-note" hidden>Cliquez sur × pour retirer un matériel, ou écrivez-en un nouveau puis « Ajouter ». Vos modifications sont enregistrées sur cet appareil.</span>
+      </div>
       <div class="des-table-wrap">
         <table class="des-table">
           <thead><tr><th scope="col">Lettre</th><th scope="col">Famille d’éléments</th><th scope="col">Matériel correspondant</th></tr></thead>

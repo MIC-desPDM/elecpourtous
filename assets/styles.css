@@ -852,7 +852,7 @@ dialog h2 {
 .uni-target { font-size: 0.75rem; font-weight: 600; color: var(--accent); margin: 2px 0 6px; }
 
 @media (max-width: 640px) {
-  .sch-subtabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border-radius: var(--radius-md); }
+  .sch-subtabs { display: grid; grid-template-columns: 1fr 1fr 1fr; width: 100%; border-radius: var(--radius-md); }
   .sch-subtab { padding: 8px 6px; font-size: 0.8125rem; white-space: normal; line-height: 1.25; border-radius: var(--radius-sm); }
 }
 .uni-sec {
@@ -957,3 +957,38 @@ dialog h2 {
 .des-alt b { font-family: var(--font-mono); }
 .des-meaning { font-size: 1.0625rem; font-weight: 600; }
 .des-meaning .des-sep { color: var(--text-faint); font-weight: 400; }
+
+/* Grafcet : à venir */
+.sch-grafcet-soon { display: none; }
+[data-sch-mode='grafcet'] .sch-toolbars,
+[data-sch-mode='grafcet'] .sch-layout,
+[data-sch-mode='grafcet'] .sch-hint { display: none !important; }
+[data-sch-mode='grafcet'] .sch-grafcet-soon {
+  display: block; padding: 28px 20px; text-align: center;
+  border: 1px dashed var(--border); border-radius: var(--radius-lg); background: var(--surface);
+  font-size: 1rem; color: var(--text-muted);
+}
+.sch-grafcet-soon strong { display: block; font-size: 1.375rem; color: var(--accent); margin-bottom: 4px; }
+
+/* Désignation : modification des matériels */
+.des-edit-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.des-edit-note { font-size: 0.8125rem; color: var(--text-muted); }
+.des-mats { display: inline; }
+.des-editing .des-mats { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.des-editing .des-mat { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 9px; border-radius: 9999px; background: var(--surface-2); color: var(--text); }
+.des-mat-x {
+  display: none; width: 20px; height: 20px; border-radius: 50%; place-items: center;
+  font-size: 0.875rem; line-height: 1; color: var(--text-muted);
+}
+.des-editing .des-mat-x { display: inline-grid; }
+.des-mat-x:hover { background: var(--danger-soft); color: var(--danger); }
+.des-editing .des-sepc { display: none; }
+.des-mat.is-added { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+.des-add { display: none; gap: 6px; margin-top: 6px; width: 100%; }
+.des-editing .des-add { display: flex; }
+.des-add input {
+  flex: 1; min-width: 0; padding: 5px 10px; font: inherit; font-size: 0.8125rem;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
+}
+.des-add input:focus { outline: none; border-color: var(--accent); }
+.des-empty { color: var(--text-faint); font-style: italic; }
