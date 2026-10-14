@@ -72,8 +72,9 @@
       <button type="button" role="tab" class="sch-subtab" data-sch-subtab="unifilaire" aria-selected="false">Schémas Unifilaire</button>
     </div>
 
-    <!-- Outils propres aux schémas d'implantation -->
-    <div class="sch-implantation-ui">
+    <!-- Outils communs aux deux sous-parties : les éléments « impl-only » n'apparaissent qu'en implantation,
+         les éléments « uni-only » qu'en unifilaire. Le plan d'implantation n'est pas modifiable en unifilaire. -->
+    <div class="sch-toolbars">
     <div class="sch-top">
       <label class="sch-select"><span class="sr-only">Schéma en cours</span><select id="sch-select"></select></label>
       <div class="sch-top-actions">
@@ -93,16 +94,18 @@
     <div class="sch-tools" id="sch-tools" role="toolbar" aria-label="Outils de dessin">
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="select" aria-pressed="true">Sélection</button>
       <button type="button" class="btn btn-ghost btn-sm btn-tool" id="sch-multi" aria-pressed="false" title="Sélection multiple : un clic ajoute ou retire un élément ; faire glisser sur le fond trace un rectangle de sélection">Sélection multiple</button>
-      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="wall" aria-pressed="false">Mur</button>
-      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="room" aria-pressed="false">Pièce</button>
-      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="floor" aria-pressed="false" title="Sol : rectangle ou forme libre, dessiné sous les murs">Sol</button>
-      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="circle" aria-pressed="false" title="Cercle / ellipse, rempli d'un matériau de mur">Cercle</button>
-      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="square" aria-pressed="false" title="Carré / rectangle, rempli d'un matériau de mur">Carré</button>
-      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="triangle" aria-pressed="false" title="Triangle, rempli d'un matériau de mur">Triangle</button>
-      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="door" aria-pressed="false">Porte</button>
-      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="window" aria-pressed="false">Fenêtre</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool uni-only" data-tool="uline" aria-pressed="false" title="Trait (câble) marqué de ses conducteurs : neutre, terre, conducteurs">Trait</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool uni-only" data-tool="jbox" aria-pressed="false" title="Boîte de dérivation, repérée BD0, BD1, BD2…">Boîte de dérivation</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool impl-only" data-tool="wall" aria-pressed="false">Mur</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool impl-only" data-tool="room" aria-pressed="false">Pièce</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool impl-only" data-tool="floor" aria-pressed="false" title="Sol : rectangle ou forme libre, dessiné sous les murs">Sol</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool impl-only" data-tool="circle" aria-pressed="false" title="Cercle / ellipse, rempli d'un matériau de mur">Cercle</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool impl-only" data-tool="square" aria-pressed="false" title="Carré / rectangle, rempli d'un matériau de mur">Carré</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool impl-only" data-tool="triangle" aria-pressed="false" title="Triangle, rempli d'un matériau de mur">Triangle</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool impl-only" data-tool="door" aria-pressed="false">Porte</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool impl-only" data-tool="window" aria-pressed="false">Fenêtre</button>
       <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="text" aria-pressed="false">Texte</button>
-      <button type="button" class="btn btn-ghost btn-sm btn-tool" data-tool="link" aria-pressed="false">Liaison</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-tool impl-only" data-tool="link" aria-pressed="false">Liaison</button>
       <span class="sch-sep"></span>
       <label class="sch-snap"><input type="checkbox" id="sch-snap" checked> Grille magnétique</label>
       <span class="sch-sep"></span>
@@ -130,7 +133,7 @@
       <button type="button" class="btn btn-danger btn-sm" id="sch-delete" title="Supprimer (Suppr)">Supprimer</button>
     </div>
 
-    <div class="sch-wallbar" id="sch-wallbar" role="toolbar" aria-label="Murs : épaisseur et matériau">
+    <div class="sch-wallbar impl-only" id="sch-wallbar" role="toolbar" aria-label="Murs : épaisseur et matériau">
       <span class="sch-bglabel">Murs</span>
       <span class="sch-snap">Épaisseur</span>
       <button type="button" class="btn btn-ghost btn-sm" id="sch-th-m" aria-label="Réduire l'épaisseur">−</button>
@@ -156,26 +159,8 @@
 
     </div>
 
-    <!-- Outils propres aux schémas unifilaires (le plan d'implantation n'y est pas modifiable) -->
-    <div class="sch-uni-ui">
-      <div class="sch-tools" role="toolbar" aria-label="Outils du schéma unifilaire">
-        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-utool="select" aria-pressed="true">Sélection</button>
-        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-utool="line" aria-pressed="false" title="Tracer un trait (câble) marqué de ses conducteurs">Trait</button>
-        <span class="sch-sep"></span>
-        <button type="button" class="btn btn-ghost btn-sm" id="uni-undo" title="Annuler (Ctrl+Z)">Annuler</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="uni-redo" title="Rétablir (Ctrl+Y)">Rétablir</button>
-        <span class="sch-sep"></span>
-        <button type="button" class="btn btn-ghost btn-sm" id="uni-zoom-out" aria-label="Dézoomer">−</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="uni-zoom-in" aria-label="Zoomer">+</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="uni-fit">Ajuster</button>
-        <span class="sch-sep"></span>
-        <button type="button" class="btn btn-danger btn-sm" id="uni-delete" title="Supprimer le trait sélectionné (Suppr)">Supprimer</button>
-      </div>
-    </div>
-
     <div class="sch-layout">
       <aside class="sch-palette" id="sch-palette" aria-label="Bibliothèque de symboles"></aside>
-      <aside class="sch-palette sch-uni-panel" id="uni-panel" aria-label="Marquage des traits"></aside>
       <div class="sch-canvas-wrap">
         <svg id="sch-svg" role="img" aria-label="Zone de dessin du schéma">
           <defs>

@@ -832,23 +832,22 @@ dialog h2 {
 .sch-subtab:hover { color: var(--accent); }
 .sch-subtab[aria-selected='true'] { background: var(--accent); color: var(--accent-contrast); }
 
-/* Unifilaire : outils d'implantation masqués, plan non modifiable, outils des traits affichés */
-.sch-uni-ui, .sch-uni-panel { display: none; }
-[data-sch-mode='unifilaire'] .sch-implantation-ui,
-[data-sch-mode='unifilaire'] #sch-palette { display: none; }
-[data-sch-mode='unifilaire'] .sch-uni-ui { display: block; }
-[data-sch-mode='unifilaire'] .sch-uni-panel { display: block; }
-[data-sch-mode='unifilaire'] .sch-layout { height: calc(100dvh - 300px); }
-@media (max-width: 800px) {
-  [data-sch-mode='unifilaire'] .sch-layout { height: auto; }
-}
+/* Unifilaire : outils propres à l'implantation masqués, plan d'implantation non modifiable */
+#main-schemas:not([data-sch-mode='unifilaire']) .uni-only { display: none !important; }
+[data-sch-mode='unifilaire'] .impl-only { display: none !important; }
 
 .uni-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: var(--radius-sm); }
 .uni-row + .uni-row { border-top: 1px solid var(--divider); }
 .uni-row svg { background: #fff; border-radius: 4px; flex-shrink: 0; }
 .uni-name { flex: 1; font-size: 0.8125rem; color: var(--text); line-height: 1.2; }
-.uni-count { min-width: 1.6em; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
 .uni-row .btn-sm { padding: 3px 10px; }
+.uni-count[type='number'] {
+  width: 3.4em; padding: 3px 4px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); font: inherit; font-weight: 700; text-align: center;
+  -moz-appearance: textfield;
+}
+.uni-count[type='number']::-webkit-inner-spin-button, .uni-count[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .uni-row.is-on { background: var(--accent-soft); }
 .uni-target { font-size: 0.75rem; font-weight: 600; color: var(--accent); margin: 2px 0 6px; }
 

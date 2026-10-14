@@ -6,7 +6,9 @@
      door   {x,y,rot,len,flip}     window {x,y,rot,len}
      sym    {key,x,y,rot,s}        text   {x,y,text,size}
      link   {a:{id?,x,y}, b:{id?,x,y}}
-   Schémas unifilaires (schema.uni) : traits {x1,y1,x2,y2,m:{c,N,T}}
+   Schémas unifilaires : calque séparé (schema.uni) avec les mêmes éléments, plus
+     uline  {x1,y1,x2,y2,m:{c:{couleur:n},N,T}}   (trait marqué de ses conducteurs)
+     shape  {..., bd:n}                            (boîte de dérivation « BDn »)
    ============================================================ */
 (function () {
   'use strict';
@@ -53,6 +55,8 @@
           db = { list: d.list.filter((s) => s && Array.isArray(s.items)), current: d.current };
           // anciennes portes : « flip » (sens d'ouverture) devient « my » (miroir vertical)
           for (const s of db.list) for (const it of s.items) if (it && it.t === 'door' && it.flip !== undefined) { if (it.flip) it.my = true; delete it.flip; }
+          // premiers traits unifilaires (sans type) : ce sont des « uline »
+          for (const s of db.list) if (Array.isArray(s.uni)) s.uni = s.uni.filter(Boolean).map((l) => (l.t ? l : { ...l, t: 'uline' }));
         }
       }
     } catch (e) { /* données illisibles : on repart de zéro */ }
@@ -115,15 +119,18 @@
     gesture: null,
     undo: [],
     redo: [],
-    // Schémas unifilaires (S.readonly = vrai : le plan d'implantation n'est plus modifiable)
+    // Schémas unifilaires : S.readonly = vrai quand la sous-partie « Unifilaire » est ouverte.
+    // On travaille alors sur le calque schema.uni ; le plan d'implantation reste affiché mais n'est pas modifiable.
     readonly: false,
-    utool: 'select',       // 'select' | 'line'
-    usel: null,            // trait sélectionné
-    udraft: null,          // point de départ du trait en cours
     umark: { c: { '#FF0000': 1 }, N: 1, T: 1 },   // marquage des prochains traits
-    uundo: [],
-    uredo: [],
+    hist: null,            // historiques Annuler / Rétablir propres à chaque sous-partie
   };
+  function resetHist() {
+    S.hist = { implantation: { undo: [], redo: [] }, unifilaire: { undo: [], redo: [] } };
+    const h = S.hist[S.readonly ? 'unifilaire' : 'implantation'];
+    S.undo = h.undo; S.redo = h.redo;
+  }
+  resetHist();
 
   // S.sel = identifiant de l'élément sélectionné quand il y en a exactement un (sinon null) ;
   // S.sels = sélection complète. Les actions « un seul élément » restent donc inchangées.
@@ -133,7 +140,10 @@
   });
 
   const schema = () => db.list.find((s) => s.id === db.current) || null;
-  const items = () => (schema() ? schema().items : []);
+  const layerKey = () => (S.readonly ? 'uni' : 'items');
+  const implItems = () => (schema() ? schema().items : []);
+  const uniItems = () => { const s = schema(); if (!s) return []; if (!Array.isArray(s.uni)) s.uni = []; return s.uni; };
+  const items = () => (S.readonly ? uniItems() : implItems());   // calque modifiable de la sous-partie ouverte
   const snapJSON = () => JSON.stringify(items());
   const findItem = (id) => items().find((i) => i.id === id) || null;
   const selItems = () => S.sels.map(findItem).filter(Boolean);
@@ -160,7 +170,7 @@
     updateUI();
   }
   function setItems(arr) {
-    schema().items = arr;
+    schema()[layerKey()] = arr;
     pruneSel();
     save();
     render();
@@ -178,6 +188,7 @@
   }
 
   /* ---------- Géométrie ---------- */
+  const isSeg = (it) => it.t === 'wall' || it.t === 'uline';   // éléments définis par deux extrémités
   const snapOn = (v, step) => (S.snap ? snapTo(v, step) : v);
   const snapPt = (p, step) => ({ x: snapOn(p.x, step), y: snapOn(p.y, step) });
 
@@ -438,10 +449,12 @@
   }
 
   function sceneSVG(list) {
-    let floors = '', walls = '', open = '', links = '', syms = '', texts = '', wallsFill = '', shOut = '', shFill = '';
+    let floors = '', walls = '', open = '', links = '', syms = '', texts = '', wallsFill = '', shOut = '', shFill = '', ulines = '', jbx = '';
     for (const it of list) {
       if (it.t === 'floor') floors += floorSVG(it);
+      else if (it.t === 'shape' && isJbox(it)) jbx += jboxSVG(it);
       else if (it.t === 'shape') { shOut += shapeOutlineSVG(it); shFill += shapeFillSVG(it); }
+      else if (it.t === 'uline') ulines += ulineSVG(it);
       else if (it.t === 'door' || it.t === 'window') open += openingSVG(it);
       else if (it.t === 'link') links += linkSVG(list, it);
       else if (it.t === 'sym') syms += symSVG(it);
@@ -450,12 +463,16 @@
     // Les murs épais sont dessinés en dernier : une cloison fine s'arrête proprement contre un mur épais
     const wl = list.filter((i) => i.t === 'wall').sort((a, b) => (a.th || WALL_TH) - (b.th || WALL_TH));
     for (const w of wl) { walls += wallOutlineSVG(w); wallsFill += wallFillSVG(w); }
-    return floors + walls + shOut + wallsFill + shFill + open + links + syms + texts;
+    return floors + walls + shOut + wallsFill + shFill + open + links + ulines + jbx + syms + texts;
   }
 
   function selSVG(it, multi) {
     const dash = `fill="none" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"`;
     const handle = (x, y) => (multi || it.locked) ? '' : `<circle cx="${x}" cy="${y}" r="${7 / S.view.k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    if (it.t === 'uline') {
+      return `<line x1="${it.x1}" y1="${it.y1}" x2="${it.x2}" y2="${it.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="10" stroke-linecap="round"/>` +
+        handle(it.x1, it.y1) + handle(it.x2, it.y2);
+    }
     if (it.t === 'wall') {
       const dc = it.bend ? wallPathD(it) : null;
       const sw = (it.th || WALL_TH) + 6;
@@ -503,7 +520,7 @@
 
   const LOCK_RED = '#d62828';
   function lockPos(it) {
-    if (it.t === 'wall') return { x: (it.x1 + it.x2) / 2, y: (it.y1 + it.y2) / 2 };
+    if (isSeg(it)) return { x: (it.x1 + it.x2) / 2, y: (it.y1 + it.y2) / 2 };
     if (it.t === 'link') {
       const a = resolveEnd(items(), it.a), b = resolveEnd(items(), it.b);
       return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -525,7 +542,6 @@
   }
 
   function overlaySVG() {
-    if (S.readonly) return uniOverlaySVG();
     let o = '';
     const selList = selItems();
     for (const it of selList) o += selSVG(it, selList.length > 1);
@@ -561,6 +577,16 @@
       const q = c ? snapPt(c, GRID) : S.draft;
       o += `<line x1="${S.draft.x}" y1="${S.draft.y}" x2="${q.x}" y2="${q.y}" stroke="${SEL}" stroke-opacity="0.6" stroke-width="${S.th}" stroke-linecap="square"/>`;
       o += `<circle cx="${S.draft.x}" cy="${S.draft.y}" r="${5 / k}" fill="${SEL}"/>`;
+    }
+    if (S.tool === 'uline' && S.draft) {
+      const q = c ? snapPt(c, STEP) : S.draft;
+      o += `<g opacity="0.6">${ulineSVG({ x1: S.draft.x, y1: S.draft.y, x2: q.x, y2: q.y, m: S.umark })}</g>`;
+      o += `<circle cx="${S.draft.x}" cy="${S.draft.y}" r="${5 / k}" fill="${SEL}"/>`;
+    }
+    if (S.tool === 'jbox' && c) {
+      const dr = S.drag && S.drag.mode === 'shapeNew' ? S.drag : null;
+      const g = dr ? jboxFromDrag(dr.a, snapPt(c, STEP), dr.moved, dr.shift) : { ...snapPt(c, STEP), w: JBOX_SIZE, h: JBOX_SIZE };
+      o += `<g opacity="0.55">${jboxSVG({ x: g.x, y: g.y, w: g.w, h: g.h, rot: 0, bd: nextBd() })}</g>`;
     }
     if ((S.tool === 'circle' || S.tool === 'square' || S.tool === 'triangle') && c) {
       const dr = S.drag && S.drag.mode === 'shapeNew' ? S.drag : null;
@@ -604,6 +630,11 @@
     worldG.setAttribute('transform', `translate(${rnd(S.view.x)} ${rnd(S.view.y)}) scale(${S.view.k})`);
   }
   function renderOverlay() { overG.innerHTML = overlaySVG(); }
+  // Redessine seulement le calque en cours de modification
+  function renderScene() {
+    if (S.readonly) uniG.innerHTML = sceneSVG(uniItems());
+    else sceneG.innerHTML = sceneSVG(implItems());
+  }
   // Fond de plan : l'élément <image> n'est reconstruit que si l'image change
   let bgSig = '';
   function currentBg() {
@@ -635,8 +666,8 @@
     pruneSel();
     applyView();
     renderBg();
-    sceneG.innerHTML = sceneSVG(items());
-    uniG.innerHTML = S.readonly ? uniSceneSVG() : '';
+    sceneG.innerHTML = sceneSVG(implItems());
+    uniG.innerHTML = S.readonly ? sceneSVG(uniItems()) : '';
     renderOverlay();
   }
 
@@ -684,6 +715,10 @@
     }
     for (let i = list.length - 1; i >= 0; i--) {
       const it = list[i];
+      if (it.t === 'uline' && distSeg(p, it.x1, it.y1, it.x2, it.y2).d <= 3 + tol) return it;
+    }
+    for (let i = list.length - 1; i >= 0; i--) {
+      const it = list[i];
       if (it.t !== 'wall') continue;
       if (wallNearest(it, p).d <= (it.th || WALL_TH) / 2 + tol) return it;
     }
@@ -724,6 +759,7 @@
 
   // Rectangle englobant [x0, y0, x1, y1] d'un élément (null pour une liaison)
   function itemBounds(it) {
+    if (it.t === 'uline') return [Math.min(it.x1, it.x2) - 14, Math.min(it.y1, it.y2) - 14, Math.max(it.x1, it.x2) + 14, Math.max(it.y1, it.y2) + 14];
     if (it.t === 'wall') {
       const m = (it.th || WALL_TH) / 2 + 3;
       const pts = wallPoints(it, 24);
@@ -766,8 +802,7 @@
   }
 
   function fullBBox() {
-    let bb = contentBBox(items());
-    if (S.readonly) bb = mergeBox(bb, uniBBox());
+    const bb = contentBBox(S.readonly ? implItems().concat(uniItems()) : implItems());
     const cb = currentBg();
     if (!cb) return bb;
     const b = cb.b;
@@ -806,7 +841,10 @@
     link: 'Liaison : faites glisser d’un symbole à un autre (commande vers éclairage, par exemple).',
     bg: 'Fond de plan : faites glisser l’image pour la déplacer, les coins pour la redimensionner. Choisissez ensuite un autre outil.',
     place: 'Cliquez sur le plan pour poser le symbole (plusieurs fois de suite). Échap pour arrêter.',
+    uline: 'Trait : faites glisser d’un point à un autre, ou cliquez le départ puis chaque point suivant (double-clic ou Échap pour terminer). Le marquage (neutre, terre, conducteurs) se règle dans le panneau « Marquage du trait ».',
+    jbox: 'Boîte de dérivation : cliquez pour en poser une, ou faites glisser pour fixer sa taille (Maj : carré parfait). Elle est numérotée BD0, BD1, BD2… ; « Modifier le numéro » ou un double-clic change le numéro.',
   };
+  const UNI_SELECT_HINT = 'Unifilaire : le plan d’implantation est affiché mais ne peut pas être modifié ici. Cliquez un trait, une boîte, un symbole ou un texte pour le déplacer ; glisser le fond déplace la vue ; molette ou pincement pour zoomer.';
 
   function setTool(tool, key) {
     S.tool = tool;
@@ -843,8 +881,7 @@
   function startGesture() {
     const pts = [...S.pointers.values()];
     S.drag = null;
-    S.draft = S.tool === 'wall' ? S.draft : null;
-    if (S.drag && S.drag.mode === 'uLine' && S.drag.fresh) S.udraft = null;
+    S.draft = S.tool === 'wall' || S.tool === 'uline' ? S.draft : null;
     S.gesture = {
       d: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1,
       cx: (pts[0].x + pts[1].x) / 2,
@@ -875,15 +912,13 @@
       S.drag = { mode: 'pan', cx: e.clientX, cy: e.clientY, vx: S.view.x, vy: S.view.y };
       return;
     }
-    // Schémas unifilaires : seuls les traits sont modifiables
-    if (S.readonly) { uniDown(e, p); return; }
 
     switch (S.tool) {
       case 'select': {
         // Maj / Ctrl / Cmd (ou mode « Sélection multiple ») : on ajoute ou retire des éléments
         const additive = e.shiftKey || e.ctrlKey || e.metaKey || S.multi;
         const one = S.sel && findItem(S.sel);
-        if (one && one.t === 'wall' && !one.locked) {
+        if (one && isSeg(one) && !one.locked) {
           const h = wallHandleAt(one, p);
           if (h) { S.drag = { mode: 'wallEnd', id: one.id, h, before: snapJSON() }; return; }
         }
@@ -901,6 +936,17 @@
         }
         const hit = hitItem(p);
         const here = { cx: e.clientX, cy: e.clientY, moved: false, vx: S.view.x, vy: S.view.y };
+        // double appui (souris ou doigt) sur un texte ou une boîte de dérivation : modification
+        const now = Date.now(), last = S.lastDown;
+        S.lastDown = { t: now, x: e.clientX, y: e.clientY, id: hit ? hit.id : null };
+        if (hit && !additive && last && last.id === hit.id && now - last.t < 450 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 10 &&
+            (hit.t === 'text' || isJbox(hit))) {
+          S.lastDown = null; S.dblDone = now;
+          S.sels = [hit.id]; S.drag = null;
+          render(); updateUI();
+          setTimeout(() => editText(hit.id), 0);
+          return;
+        }
         if (hit) {
           let click = null;
           if (additive) {
@@ -932,6 +978,14 @@
         renderOverlay();
         break;
       }
+      case 'uline': {
+        const q = snapPt(p, STEP);
+        if (!S.draft) { S.draft = { x: q.x, y: q.y }; S.drag = { mode: 'uline', fresh: true, cx: e.clientX, cy: e.clientY }; }
+        else { S.drag = { mode: 'uline', fresh: false, cx: e.clientX, cy: e.clientY }; }
+        renderOverlay();
+        break;
+      }
+      case 'jbox':
       case 'circle':
       case 'square':
       case 'triangle':
@@ -1012,7 +1066,6 @@
       applyView();
       return;
     }
-    if (d.mode === 'uMove' || d.mode === 'uEnd') { uniMove(d, p); return; }
     if (d.mode === 'gmove') {
       if (!d.moved) return;
       if (d.allLocked) {                     // tout est figé : glisser déplace la vue
@@ -1025,11 +1078,11 @@
       for (const id of d.ids) {
         const it = findItem(id), o = d.origs[id];
         if (!it || it.t === 'link' || it.locked) continue;
-        if (it.t === 'wall') { it.x1 = o.x1 + dx; it.y1 = o.y1 + dy; it.x2 = o.x2 + dx; it.y2 = o.y2 + dy; }
+        if (isSeg(it)) { it.x1 = o.x1 + dx; it.y1 = o.y1 + dy; it.x2 = o.x2 + dx; it.y2 = o.y2 + dy; }
         else if (it.t === 'floor') it.pts = o.pts.map(([x, y]) => [x + dx, y + dy]);
         else { it.x = o.x + dx; it.y = o.y + dy; }
       }
-      sceneG.innerHTML = sceneSVG(items());
+      renderScene();
       renderOverlay();
       return;
     }
@@ -1042,8 +1095,9 @@
         d.panned = true; applyView(); return;
       }
       const dx = p.x - d.p0.x, dy = p.y - d.p0.y, o = d.orig;
-      if (it.t === 'wall') {
-        const ex = snapOn(o.x1 + dx, GRID) - o.x1, ey = snapOn(o.y1 + dy, GRID) - o.y1;
+      if (isSeg(it)) {
+        const st = it.t === 'wall' ? GRID : STEP;
+        const ex = snapOn(o.x1 + dx, st) - o.x1, ey = snapOn(o.y1 + dy, st) - o.y1;
         it.x1 = o.x1 + ex; it.y1 = o.y1 + ey; it.x2 = o.x2 + ex; it.y2 = o.y2 + ey;
       } else if (it.t === 'floor') {
         const ex = snapOn(o.pts[0][0] + dx, GRID) - o.pts[0][0], ey = snapOn(o.pts[0][1] + dy, GRID) - o.pts[0][1];
@@ -1055,7 +1109,7 @@
         it.rot = o.rot;
         placeOpening(it, { x: c0.x + dx, y: c0.y + dy });
       }
-      sceneG.innerHTML = sceneSVG(items());
+      renderScene();
       renderOverlay();
       return;
     }
@@ -1087,7 +1141,7 @@
       if (Math.abs(s) < 4) s = 0;
       s = Math.max(-L, Math.min(L, s));
       if (s) w.bend = rnd(s); else delete w.bend;
-      sceneG.innerHTML = sceneSVG(items());
+      renderScene();
       renderOverlay();
       return;
     }
@@ -1109,7 +1163,7 @@
       s.w = rnd(nw); s.h = rnd(nh);
       s.x = rnd(o.x + cx * Math.cos(a) - cy * Math.sin(a));
       s.y = rnd(o.y + cx * Math.sin(a) + cy * Math.cos(a));
-      sceneG.innerHTML = sceneSVG(items());
+      renderScene();
       renderOverlay();
       return;
     }
@@ -1118,16 +1172,18 @@
       if (!f) return;
       const q = snapPt(p, GRID);
       f.pts[d.i] = [q.x, q.y];
-      sceneG.innerHTML = sceneSVG(items());
+      renderScene();
       renderOverlay();
       return;
     }
     if (d.mode === 'wallEnd') {
       const w = findItem(d.id);
       if (!w) return;
-      const q = snapPt(p, GRID);
+      const q = snapPt(p, w.t === 'uline' ? STEP : GRID);
+      if (d.ox === undefined) { d.ox = d.h === 1 ? w.x1 : w.x2; d.oy = d.h === 1 ? w.y1 : w.y2; }
       if (d.h === 1) { w.x1 = q.x; w.y1 = q.y; } else { w.x2 = q.x; w.y2 = q.y; }
-      sceneG.innerHTML = sceneSVG(items());
+      if (w.t === 'uline' && w.x1 === w.x2 && w.y1 === w.y2) { if (d.h === 1) { w.x1 = d.ox; w.y1 = d.oy; } else { w.x2 = d.ox; w.y2 = d.oy; } }
+      renderScene();
       renderOverlay();
       return;
     }
@@ -1146,7 +1202,6 @@
     S.cursor = p;
 
     if (d.mode === 'pan') { rememberView(); return; }
-    if (d.mode === 'uMove' || d.mode === 'uEnd' || d.mode === 'uLine') { uniUp(d, p, e); return; }
     if (d.mode === 'bgMove' || d.mode === 'bgScale') { save(); renderOverlay(); return; }
     if (d.mode === 'move' || d.mode === 'gmove' || d.mode === 'wallEnd' || d.mode === 'floorVertex' || d.mode === 'wallBend' || d.mode === 'shapeResize') {
       if (d.panned) rememberView();
@@ -1186,7 +1241,24 @@
       return;
     }
     if (d.mode === 'shapeNew') {
-      addShape(d.kind, shapeFromDrag(d.a, snapPt(p, STEP), d.moved, e.shiftKey));
+      if (d.kind === 'jbox') addJbox(jboxFromDrag(d.a, snapPt(p, STEP), d.moved, e.shiftKey));
+      else addShape(d.kind, shapeFromDrag(d.a, snapPt(p, STEP), d.moved, e.shiftKey));
+      return;
+    }
+    if (d.mode === 'uline') {
+      const q = snapPt(p, STEP);
+      if (d.fresh) {
+        if (Math.hypot(e.clientX - d.cx, e.clientY - d.cy) > 8) {
+          if (q.x !== S.draft.x || q.y !== S.draft.y) addULine(S.draft, q);
+          S.draft = null;
+        }
+      } else if (q.x === S.draft.x && q.y === S.draft.y) {
+        S.draft = null;
+      } else {
+        addULine(S.draft, q);
+        S.draft = { x: q.x, y: q.y };
+      }
+      renderOverlay();
       return;
     }
     if (d.mode === 'floor') {
@@ -1239,7 +1311,6 @@
   function onCancel(e) {
     S.pointers.delete(e.pointerId);
     if (S.pointers.size < 2) S.gesture = null;
-    if (S.drag && (S.drag.mode === 'uMove' || S.drag.mode === 'uEnd')) uniSet(JSON.parse(S.drag.before), false);
     if (S.drag && (S.drag.mode === 'move' || S.drag.mode === 'gmove' || S.drag.mode === 'wallEnd' || S.drag.mode === 'floorVertex' || S.drag.mode === 'wallBend' || S.drag.mode === 'shapeResize')) setItems(JSON.parse(S.drag.before));
     S.drag = null;
     renderOverlay();
@@ -1257,12 +1328,12 @@
     zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015));
   }, { passive: false });
   svg.addEventListener('dblclick', (e) => {
-    if (S.readonly) { if (S.udraft) { S.udraft = null; renderOverlay(); } return; }
-    if (S.tool === 'wall') { S.draft = null; renderOverlay(); return; }
+    if (S.tool === 'wall' || S.tool === 'uline') { S.draft = null; renderOverlay(); return; }
     if (S.tool === 'floor') { closeFloor(); return; }
     if (S.tool === 'select') {
+      if (Date.now() - (S.dblDone || 0) < 800) return;     // déjà traité par le double appui
       const hit = hitItem(toWorld(e));
-      if (hit && hit.t === 'text') editText(hit.id);
+      if (hit && (hit.t === 'text' || isJbox(hit))) editText(hit.id);
     }
   });
 
@@ -1271,7 +1342,7 @@
 
   function rotateSel(dir) {
     const one = sel();
-    if (S.sels.length > 1 || (one && one.t === 'floor')) { rotateGroup(dir); return; }
+    if (S.sels.length > 1 || (one && (one.t === 'floor' || one.t === 'uline'))) { rotateGroup(dir); return; }
     const it = sel();
     if (!it || it.locked || !['sym', 'door', 'window', 'shape'].includes(it.t)) return;
     mutate(() => { it.rot = ((it.rot || 0) + 90 * dir + 360) % 360; });
@@ -1293,7 +1364,7 @@
   }
   function mirrorSel(axis) {
     const one = sel();
-    if (S.sels.length > 1 || (one && one.t === 'floor')) { mirrorGroup(axis); return; }
+    if (S.sels.length > 1 || (one && (one.t === 'floor' || one.t === 'uline'))) { mirrorGroup(axis); return; }
     const it = sel();
     if (!it || it.locked || (it.t !== 'sym' && it.t !== 'door' && it.t !== 'shape')) return;
     mutate(() => {
@@ -1337,7 +1408,7 @@
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     const add = (x, y) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
     for (const it of list) {
-      if (it.t === 'wall') { add(it.x1, it.y1); add(it.x2, it.y2); }
+      if (isSeg(it)) { add(it.x1, it.y1); add(it.x2, it.y2); }
       else if (it.t === 'floor') { for (const q of it.pts) add(q[0], q[1]); }
       else if (it.t === 'door' || it.t === 'window') { const c = openingCenter(it); add(c.x, c.y); }
       else add(it.x, it.y);
@@ -1360,7 +1431,7 @@
     const rp = (x, y) => ({ x: rnd(c.x - (y - c.y) * dir), y: rnd(c.y + (x - c.x) * dir) });
     mutate(() => {
       for (const it of list) {
-        if (it.t === 'wall') {
+        if (isSeg(it)) {
           const a = rp(it.x1, it.y1), b = rp(it.x2, it.y2);
           it.x1 = a.x; it.y1 = a.y; it.x2 = b.x; it.y2 = b.y;
         } else if (it.t === 'floor') {
@@ -1387,7 +1458,7 @@
     const rx = (x) => rnd(2 * c.x - x), ry = (y) => rnd(2 * c.y - y);
     mutate(() => {
       for (const it of list) {
-        if (it.t === 'wall') {
+        if (isSeg(it)) {
           if (axis === 'h') { it.x1 = rx(it.x1); it.x2 = rx(it.x2); } else { it.y1 = ry(it.y1); it.y2 = ry(it.y2); }
           if (it.bend) it.bend = -it.bend;      // un miroir inverse le côté de la courbure
         } else if (it.t === 'floor') {
@@ -1415,6 +1486,7 @@
 
   function editText(id) {
     const it = findItem(id || S.sel);
+    if (it && !it.locked && isJbox(it)) { editJbox(it); return; }
     if (!it || it.locked || it.t !== 'text') return;
     const t = window.prompt('Texte à afficher :', it.text);
     if (t !== null && t.trim()) mutate(() => { it.text = t.trim().slice(0, 80); });
@@ -1428,7 +1500,7 @@
       c.id = uid();
       delete c.locked;                      // la copie d'un élément figé n'est pas figée
       map[it.id] = c.id;
-      if (it.t === 'wall') { c.x1 += GRID; c.y1 += GRID; c.x2 += GRID; c.y2 += GRID; }
+      if (isSeg(it)) { c.x1 += GRID; c.y1 += GRID; c.x2 += GRID; c.y2 += GRID; }
       else if (it.t === 'floor') c.pts = c.pts.map(([x, y]) => [x + GRID, y + GRID]);
       else { c.x += GRID; c.y += GRID; }
       copies.push(c);
@@ -1448,7 +1520,7 @@
     const ids = new Set(selItems().filter((i) => !i.locked).map((i) => i.id));
     if (!ids.size) return;
     mutate(() => {
-      schema().items = items().filter((i) => !ids.has(i.id) && !(i.t === 'link' && ((i.a && ids.has(i.a.id)) || (i.b && ids.has(i.b.id)))));
+      schema()[layerKey()] = items().filter((i) => !ids.has(i.id) && !(i.t === 'link' && ((i.a && ids.has(i.a.id)) || (i.b && ids.has(i.b.id)))));
     });
     pruneSel();
     render(); updateUI();
@@ -1458,7 +1530,7 @@
     if (!list.length) return;
     mutate(() => {
       for (const it of list) {
-        if (it.t === 'wall') { it.x1 += dx; it.x2 += dx; it.y1 += dy; it.y2 += dy; }
+        if (isSeg(it)) { it.x1 += dx; it.x2 += dx; it.y1 += dy; it.y2 += dy; }
         else if (it.t === 'floor') it.pts = it.pts.map(([x, y]) => [x + dx, y + dy]);
         else { it.x += dx; it.y += dy; }
       }
@@ -1546,7 +1618,8 @@
 
   /* ---------- Interface ---------- */
   function paletteHTML() {
-    let h = '<h3 class="sch-group sch-group-main">Matériaux des murs</h3>' +
+    let h = `<div class="uni-only">${uniPanelHTML()}</div><div class="impl-only">` +
+      '<h3 class="sch-group sch-group-main">Matériaux des murs</h3>' +
       '<p class="sch-note">Cliquez un matériau : il s’applique au mur sélectionné et aux prochains murs.</p>';
     for (const g of MAT.groups) {
       h += `<h4 class="sch-subgroup">${esc(g.name)}</h4><div class="sch-mats">`;
@@ -1564,7 +1637,7 @@
       }
       h += '</div>';
     }
-    h += '<h3 class="sch-group sch-group-main" style="margin-top:18px">Symboles électriques</h3>';
+    h += '</div><h3 class="sch-group sch-group-main" style="margin-top:18px">Symboles électriques</h3>';
     for (const g of SYM.groups) {
       h += `<h3 class="sch-group">${esc(g.name)}</h3><div class="sch-syms">`;
       for (const d of g.items) {
@@ -1587,8 +1660,8 @@
     const nLocked = list.length - free.length;
     const t = list.length === 1 && free.length === 1 ? free[0].t : null;
     const en = (id, ok) => { const b = $(id); if (b) b.disabled = !ok; };
-    const canRot = (list.length > 1 && movable.length > 0) || ['sym', 'door', 'window', 'floor', 'shape'].includes(t);
-    const canMirror = (list.length > 1 && movable.length > 0) || t === 'sym' || t === 'door' || t === 'floor' || t === 'shape';
+    const canRot = (list.length > 1 && movable.length > 0) || ['sym', 'door', 'window', 'floor', 'shape', 'uline'].includes(t);
+    const canMirror = (list.length > 1 && movable.length > 0) || ['sym', 'door', 'floor', 'shape', 'uline'].includes(t);
     const canSize = free.some((i) => ['sym', 'door', 'window', 'text', 'shape'].includes(i.t));
     en('#sch-rot-l', canRot);
     en('#sch-rot-r', canRot);
@@ -1597,7 +1670,9 @@
     en('#sch-size-m', canSize);
     en('#sch-size-p', canSize);
     en('#sch-dup', list.some((i) => i.t !== 'link'));
-    en('#sch-edit', t === 'text');
+    const jb = t === 'shape' && isJbox(free[0]);
+    en('#sch-edit', t === 'text' || jb);
+    $('#sch-edit').textContent = jb ? 'Modifier le numéro' : 'Modifier le texte';
     en('#sch-delete', free.length > 0);
     en('#sch-lock', list.length > 0);
     const bw = selWalls().filter((w) => !w.locked);
@@ -1636,7 +1711,10 @@
     $('#sch-hint').textContent = (S.tool === 'select' && S.multi) ? HINTS.multi : (HINTS[S.tool] || '');
     $('#sch-snap').checked = S.snap;
     svg.style.cursor = S.tool === 'select' ? 'default' : 'crosshair';
-    if (S.readonly) uniUpdateUI();
+    if (S.readonly) {
+      uniUpdateUI();
+      if (S.tool === 'select' && !S.multi) $('#sch-hint').textContent = UNI_SELECT_HINT;
+    }
   }
 
   function refreshSelect() {
@@ -1645,8 +1723,8 @@
 
   function openSchema(id, keepView) {
     db.current = id;
-    S.sel = null; S.draft = null; S.drag = null; S.undo = []; S.redo = [];
-    S.usel = null; S.udraft = null; S.uundo = []; S.uredo = [];
+    S.sel = null; S.draft = null; S.drag = null;
+    resetHist();
     const s = schema();
     if (s && s.view && !keepView) S.view = { ...s.view };
     else fitView();
@@ -1726,14 +1804,15 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   function exportSVGString() {
-    const list = items();
+    const scene = sceneSVG(implItems()) + (S.readonly ? sceneSVG(uniItems()) : '');
     const bb = fullBBox() || { x: 0, y: 0, w: 400, h: 300 };
     const m = 30;
     const x = Math.floor(bb.x - m), y = Math.floor(bb.y - m), w = Math.ceil(bb.w + 2 * m), h = Math.ceil(bb.h + 2 * m);
-    return { w, h, svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${w} ${h}" width="${w}" height="${h}"><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#fff"/>${bgImageSVG()}<defs>${MAT.defsSVG()}</defs>${sceneSVG(list)}</svg>` };
+    return { w, h, svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${w} ${h}" width="${w}" height="${h}"><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#fff"/>${bgImageSVG()}<defs>${MAT.defsSVG()}</defs>${scene}</svg>` };
   }
+  const exportName = () => slug(schema().name) + (S.readonly ? '_unifilaire' : '');
   function exportSVG() {
-    download(new Blob([exportSVGString().svg], { type: 'image/svg+xml' }), slug(schema().name) + '.svg');
+    download(new Blob([exportSVGString().svg], { type: 'image/svg+xml' }), exportName() + '.svg');
   }
   function exportPNG() {
     const { w, h, svg: str } = exportSVGString();
@@ -1745,7 +1824,7 @@
       const ctx = c.getContext('2d');
       ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
       ctx.drawImage(img, 0, 0, c.width, c.height);
-      c.toBlob((b) => b && download(b, slug(schema().name) + '.png'), 'image/png');
+      c.toBlob((b) => b && download(b, exportName() + '.png'), 'image/png');
     };
     img.onerror = () => window.alert('Export PNG impossible. Utilisez l’export SVG.');
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(str);
@@ -1774,7 +1853,11 @@
       case 'shape':
         if (!['circle', 'square', 'triangle'].includes(it.kind) || ![it.x, it.y, it.w, it.h].every(num)) return null;
         return { id, t: 'shape', kind: it.kind, x: it.x, y: it.y, w: Math.max(10, Math.min(2000, it.w)), h: Math.max(10, Math.min(2000, it.h)),
-          rot: num(it.rot) ? it.rot : 0, mat: typeof it.mat === 'string' && MAT.map[it.mat] ? it.mat : 'plein' };
+          rot: num(it.rot) ? it.rot : 0, mat: typeof it.mat === 'string' && MAT.map[it.mat] ? it.mat : 'plein',
+          ...(num(it.bd) && it.bd >= 0 ? { bd: Math.round(it.bd) } : {}) };
+      case 'uline':
+        if (![it.x1, it.y1, it.x2, it.y2].every(num)) return null;
+        return { id, t: 'uline', x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2, m: uniCleanMarks(it.m) };
       case 'floor': {
         if (!Array.isArray(it.pts) || it.pts.length < 3 || it.pts.length > 200) return null;
         const pts = it.pts.map((q) => (Array.isArray(q) && q.length === 2 && num(q[0]) && num(q[1]) ? [q[0], q[1]] : null));
@@ -1804,7 +1887,9 @@
         const list = data.schema.items.map((raw) => { const c = cleanItem(raw); if (c && raw && raw.locked === true) c.locked = true; return c; }).filter(Boolean);
         const s = newSchema(String(data.schema.name || 'Schéma importé').slice(0, 60));
         s.items = list;
-        if (Array.isArray(data.schema.uni)) s.uni = data.schema.uni.map(cleanUni).filter(Boolean);
+        if (Array.isArray(data.schema.uni)) {
+          s.uni = data.schema.uni.map((raw) => { const c = cleanItem(raw && !raw.t ? { ...raw, t: 'uline' } : raw); if (c && raw && raw.locked === true) c.locked = true; return c; }).filter(Boolean);
+        }
         const rb = data.schema.bg;
         if (rb && typeof rb.data === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(rb.data) &&
             [rb.x, rb.y, rb.w, rb.h].every(num) && rb.w > 0 && rb.h > 0) {
@@ -1814,7 +1899,8 @@
           }
         }
         openSchema(s.id, false);
-        window.alert('Import réussi : ' + list.length + ' élément(s).');
+        const nu = (s.uni || []).length;
+        window.alert('Import réussi : ' + list.length + ' élément(s) d’implantation' + (nu ? ' et ' + nu + ' élément(s) unifilaire(s).' : '.'));
       } catch (err) {
         window.alert('Import impossible : ' + err.message);
       }
@@ -1829,12 +1915,23 @@
     bound = true;
     $('#sch-palette').innerHTML = paletteHTML();
     $('#sch-palette').addEventListener('click', (e) => {
+      const inc = e.target.closest('[data-uni-inc]');
+      if (inc) { uniChange(inc.dataset.uniInc, 1); return; }
+      const dec = e.target.closest('[data-uni-dec]');
+      if (dec) { uniChange(dec.dataset.uniDec, -1); return; }
       const fb = e.target.closest('.sch-flr');
       if (fb) { setFloorMaterial(fb.dataset.floor); return; }
       const m = e.target.closest('.sch-mat');
       if (m) { setMaterial(m.dataset.mat); return; }
       const b = e.target.closest('.sch-sym');
       if (b) setTool('place', b.dataset.sym);
+    });
+    $('#sch-palette').addEventListener('change', (e) => {
+      const inp = e.target.closest('[data-uni-val]');
+      if (inp) uniSetCount(inp.dataset.uniVal, inp.value);
+    });
+    $('#sch-palette').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.closest('[data-uni-val]')) e.target.blur();
     });
     $('#sch-th-m').addEventListener('click', () => changeThickness(-1));
     $('#sch-th-p').addEventListener('click', () => changeThickness(1));
@@ -1934,7 +2031,6 @@
 
   function onKey(e) {
     if (root.hidden) return;
-    if (S.readonly) { uniKey(e); return; }
     const tag = (e.target && e.target.tagName) || '';
     if (/INPUT|SELECT|TEXTAREA/.test(tag)) return;
     const mod = e.ctrlKey || e.metaKey;
@@ -1961,8 +2057,10 @@
     else if (key === 'ArrowDown') { if (S.sels.length) { e.preventDefault(); nudgeSel(0, step); } }
   }
 
-  /* ---------- Sous-parties : Implantation (édition) / Unifilaire (plan seul, à venir) ---------- */
+  /* ---------- Sous-parties : Implantation / Unifilaire ---------- */
   const MODES = ['implantation', 'unifilaire'];
+  const UNI_TOOLS = ['select', 'uline', 'jbox', 'text', 'place', 'bg'];
+  const IMPL_TOOLS = ['select', 'wall', 'room', 'floor', 'circle', 'square', 'triangle', 'door', 'window', 'text', 'link', 'place', 'bg'];
   function setMode(mode) {
     if (!MODES.includes(mode)) mode = 'implantation';
     root.dataset.schMode = mode;
@@ -1971,8 +2069,10 @@
     const ro = mode === 'unifilaire';
     if (ro !== !!S.readonly) {
       S.readonly = ro;
-      S.drag = null; S.draft = null; S.fdraft = null; S.space = false; S.usel = null; S.udraft = null;
-      if (ro) { S.sels = []; S.tool = 'select'; S.placeKey = null; }
+      S.undo = S.hist[mode].undo; S.redo = S.hist[mode].redo;     // chaque sous-partie a son historique
+      S.drag = null; S.draft = null; S.fdraft = null; S.space = false; S.sels = []; gcMemo = null;
+      const allowed = ro ? UNI_TOOLS : IMPL_TOOLS;
+      if (!allowed.includes(S.tool)) { S.tool = 'select'; S.placeKey = null; }
       if (ready) { render(); updateUI(); }
     }
   }
@@ -1981,10 +2081,9 @@
   try { startMode = window.localStorage.getItem('ef_sch_mode') || startMode; } catch (e) { /* ignoré */ }
 
   /* ============================================================
-     Schémas unifilaires : traits noirs (câbles) marqués de leurs conducteurs
-     Données : schema.uni = [{ id, x1, y1, x2, y2, m: { c: { couleur: nombre }, N: nombre, T: nombre } }]
+     Schémas unifilaires : traits noirs (câbles) marqués de leurs conducteurs, boîtes de dérivation
      Chaque conducteur est une barre oblique de sa couleur ; le nombre est écrit à côté s'il dépasse 1.
-     Les éléments du plan d'implantation restent affichés mais ne sont pas modifiables ici.
+     Aucune limite au nombre de conducteurs.
      ============================================================ */
   const UNI_NEUTRE = '#3FA9F5';
   const UNI_TERRE = '#00A859';
@@ -1997,58 +2096,20 @@
     { c: '#000000', name: 'Noir' },
     { c: '#808080', name: 'Gris' },
   ];
-  const UNI_MAX = { c: 12, N: 3, T: 3 };
   const UNI_SPACING = 10;     // écart entre deux marques le long du trait
-  const UNI_NUM_GAP = 8;      // place supplémentaire laissée au chiffre
+  const UNI_NUM_GAP = 6;      // place supplémentaire par chiffre affiché
   const UNI_HALF = 9;         // demi-longueur d'une barre oblique
-  const UNI_HINTS = {
-    select: 'Sélection : cliquez un trait pour le choisir, faites-le glisser pour le déplacer, tirez ses extrémités pour l’allonger. Le panneau « Marquage du trait » modifie son marquage. Glisser le fond déplace la vue ; molette ou pincement pour zoomer. Les éléments du plan d’implantation ne sont pas modifiables ici.',
-    line: 'Trait : faites glisser d’un point à un autre, ou cliquez le départ puis chaque point suivant (double-clic ou Échap pour terminer). Le marquage choisi dans le panneau « Marquage du trait » est appliqué au trait.',
-  };
-
-  const uniList = () => { const s = schema(); if (!s) return []; if (!Array.isArray(s.uni)) s.uni = []; return s.uni; };
-  const uniFind = (id) => uniList().find((l) => l.id === id) || null;
-  const uniSnap = () => JSON.stringify(uniList());
-  const uniSel = () => (S.usel ? uniFind(S.usel) : null);
-  const uniCount = (v, max) => (typeof v === 'number' && isFinite(v) ? Math.max(0, Math.min(max, Math.round(v))) : 0);
+  const uniCount = (v) => { const n = Math.round(Number(v)); return Number.isSafeInteger(n) && n > 0 ? n : 0; };
 
   function uniCleanMarks(m) {
     const out = { c: {}, N: 0, T: 0 };
     if (!m || typeof m !== 'object') return out;
-    if (m.c && typeof m.c === 'object') {
-      for (const k of UNI_COND) { const n = uniCount(m.c[k.c], UNI_MAX.c); if (n) out.c[k.c] = n; }
-    }
-    out.N = uniCount(m.N, UNI_MAX.N);
-    out.T = uniCount(m.T, UNI_MAX.T);
+    if (m.c && typeof m.c === 'object') for (const k of UNI_COND) { const n = uniCount(m.c[k.c]); if (n) out.c[k.c] = n; }
+    out.N = uniCount(m.N);
+    out.T = uniCount(m.T);
     return out;
   }
-  function cleanUni(l) {
-    if (!l || typeof l !== 'object' || ![l.x1, l.y1, l.x2, l.y2].every(num)) return null;
-    return { id: typeof l.id === 'string' && l.id ? l.id : uid(), x1: l.x1, y1: l.y1, x2: l.x2, y2: l.y2, m: uniCleanMarks(l.m) };
-  }
 
-  // Annuler / rétablir propres aux traits (indépendants de l'implantation)
-  function uniSet(arr, rec) {
-    const s = schema();
-    if (!s) return;
-    s.uni = arr;
-    if (S.usel && !uniFind(S.usel)) S.usel = null;
-    if (rec !== false) save();
-    render(); updateUI();
-  }
-  function umutate(fn) {
-    const before = uniSnap();
-    fn();
-    if (uniSnap() === before) return;
-    S.uundo.push(before);
-    if (S.uundo.length > 100) S.uundo.shift();
-    S.uredo.length = 0;
-    save(); render(); updateUI();
-  }
-  function uniUndo() { if (!S.uundo.length) return; S.uredo.push(uniSnap()); uniSet(JSON.parse(S.uundo.pop())); }
-  function uniRedo() { if (!S.uredo.length) return; S.uundo.push(uniSnap()); uniSet(JSON.parse(S.uredo.pop())); }
-
-  /* ----- Dessin ----- */
   // Liste ordonnée des marques : conducteurs (dans l'ordre de la palette), neutre, terre
   function uniMarkList(m) {
     const out = [];
@@ -2067,26 +2128,24 @@
   }
   function uniStroke(x1, y1, x2, y2, color, w) {
     const ln = (c, sw) => `<line x1="${rnd(x1)}" y1="${rnd(y1)}" x2="${rnd(x2)}" y2="${rnd(y2)}" stroke="${c}" stroke-width="${sw}" stroke-linecap="round"/>`;
-    return (color.toUpperCase() === '#FFFFFF' ? ln('#000', w + 1.8) : '') + ln(color, w);
+    return (color.toUpperCase() === '#FFFFFF' ? ln('#000', w + 1.8) : '') + ln(color, w);   // le blanc reçoit un fin contour noir
   }
   function uniMarkSVG(mk, cx, cy, d) {
     const W = 2.2, h = UNI_HALF;
     const tx = cx + d.x * h, ty = cy + d.y * h;          // extrémité haute
     let o = uniStroke(cx - d.x * h, cy - d.y * h, tx, ty, mk.color, W);
     if (mk.kind === 'N') {
-      o += (mk.color.toUpperCase() === '#FFFFFF' ? `<circle cx="${rnd(tx)}" cy="${rnd(ty)}" r="3.9" fill="#000"/>` : '') +
-        `<circle cx="${rnd(tx)}" cy="${rnd(ty)}" r="3" fill="${mk.color}"/>`;
+      o += `<circle cx="${rnd(tx)}" cy="${rnd(ty)}" r="3" fill="${mk.color}"/>`;
     } else if (mk.kind === 'T') {
       const px = d.y, py = -d.x;                         // barre perpendiculaire en tête (symbole de terre)
       o += uniStroke(tx - px * 5, ty - py * 5, tx + px * 5, ty + py * 5, mk.color, W);
     }
     if (mk.n > 1) {
-      const lx = tx + (mk.kind === 'c' ? 3 : 6), ly = ty + 1;
-      o += `<text x="${rnd(lx)}" y="${rnd(ly)}" font-size="10" font-weight="700" font-family="Arial, Helvetica, sans-serif" fill="#111">${mk.n}</text>`;
+      o += `<text x="${rnd(tx + (mk.kind === 'c' ? 3 : 6))}" y="${rnd(ty + 1)}" font-size="10" font-weight="700" font-family="Arial, Helvetica, sans-serif" fill="#111">${mk.n}</text>`;
     }
     return o;
   }
-  function uniLineSVG(l) {
+  function ulineSVG(l) {
     let o = `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="#000" stroke-width="2" stroke-linecap="round"/>`;
     const dx = l.x2 - l.x1, dy = l.y2 - l.y1, L = Math.hypot(dx, dy);
     const marks = uniMarkList(l.m || {});
@@ -2098,7 +2157,10 @@
     // positions le long du trait : un chiffre élargit l'écart avec la marque suivante
     const pos = [];
     let acc = 0;
-    marks.forEach((mk, i) => { pos.push(acc); acc += UNI_SPACING + (mk.n > 1 && i < marks.length - 1 ? UNI_NUM_GAP : 0); });
+    marks.forEach((mk, i) => {
+      pos.push(acc);
+      acc += UNI_SPACING + (mk.n > 1 && i < marks.length - 1 ? UNI_NUM_GAP * String(mk.n).length + 2 : 0);
+    });
     const mid = pos[pos.length - 1] / 2;
     marks.forEach((mk, i) => {
       const off = (pos[i] - mid) * sx;
@@ -2106,234 +2168,94 @@
     });
     return o;
   }
-  function uniSceneSVG() { return uniList().map(uniLineSVG).join(''); }
-
-  function uniOverlaySVG() {
-    let o = '';
-    const k = S.view.k;
-    const l = uniSel();
-    if (l) {
-      o += `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${SEL}" stroke-opacity="0.35" stroke-width="10" stroke-linecap="round"/>`;
-      for (const [x, y] of [[l.x1, l.y1], [l.x2, l.y2]]) o += `<circle cx="${x}" cy="${y}" r="${7 / k}" fill="#fff" stroke="${SEL}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
-    }
-    if (S.utool === 'line' && S.udraft) {
-      const c = S.cursor ? snapPt(S.cursor, STEP) : S.udraft;
-      o += `<g opacity="0.6">${uniLineSVG({ x1: S.udraft.x, y1: S.udraft.y, x2: c.x, y2: c.y, m: S.umark })}</g>`;
-      o += `<circle cx="${S.udraft.x}" cy="${S.udraft.y}" r="${4 / k}" fill="${SEL}"/>`;
-    }
-    return o;
+  function addULine(a, b) {
+    const it = { id: uid(), t: 'uline', x1: a.x, y1: a.y, x2: b.x, y2: b.y, m: clone(S.umark) };
+    mutate(() => items().push(it));
   }
 
-  function uniBBox() {
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const l of uniList()) {
-      x0 = Math.min(x0, l.x1, l.x2) ; y0 = Math.min(y0, l.y1, l.y2);
-      x1 = Math.max(x1, l.x1, l.x2); y1 = Math.max(y1, l.y1, l.y2);
-    }
-    if (x0 === Infinity) return null;
-    return { x: x0 - 15, y: y0 - 15, w: x1 - x0 + 30, h: y1 - y0 + 30 };
+  /* ----- Boîtes de dérivation : carré blanc repéré « BDx » (x commence à 0 et augmente de 1) ----- */
+  const JBOX_SIZE = 40;
+  const isJbox = (it) => !!it && it.t === 'shape' && typeof it.bd === 'number';
+  function nextBd() {
+    let m = -1;
+    for (const it of items()) if (isJbox(it)) m = Math.max(m, it.bd);
+    return m + 1;
   }
-  function mergeBox(a, b) {
-    if (!a) return b;
-    if (!b) return a;
-    const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
-    return { x: x0, y: y0, w: Math.max(a.x + a.w, b.x + b.w) - x0, h: Math.max(a.y + a.h, b.y + b.h) - y0 };
+  function jboxFromDrag(a, q, moved, shift) {
+    const g = shapeFromDrag(a, q, moved, shift);
+    if (!moved || (Math.abs(q.x - a.x) < 10 && Math.abs(q.y - a.y) < 10)) { g.w = JBOX_SIZE; g.h = JBOX_SIZE; }
+    return g;
   }
-
-  /* ----- Souris / toucher ----- */
-  function uniHit(p) {
-    const list = uniList(), tol = 6 / S.view.k + 2;
-    for (let i = list.length - 1; i >= 0; i--) {
-      const l = list[i];
-      if (distSeg(p, l.x1, l.y1, l.x2, l.y2).d <= tol) return l;
-    }
-    return null;
+  function jboxSVG(it) {
+    const box = shapeEl({ ...it, kind: 'square' }, `fill="#fff" stroke="#000" stroke-width="2"`);
+    const fs = rnd(Math.max(7, Math.min(40, Math.min(it.w, it.h) * 0.34)));
+    return box + `<text x="${it.x}" y="${rnd(it.y + fs * 0.36)}" font-size="${fs}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" fill="#000">BD${it.bd}</text>`;
   }
-  function uniDown(e, p) {
-    const here = { cx: e.clientX, cy: e.clientY, moved: false };
-    if (S.utool === 'line') {
-      const q = snapPt(p, STEP);
-      if (!S.udraft) { S.udraft = q; S.drag = { mode: 'uLine', fresh: true, ...here }; }
-      else S.drag = { mode: 'uLine', fresh: false, ...here };
-      renderOverlay();
-      return;
-    }
-    const cur = uniSel();
-    if (cur) {
-      const r = 12 / S.view.k;
-      const h = Math.hypot(p.x - cur.x1, p.y - cur.y1) <= r ? 1 : Math.hypot(p.x - cur.x2, p.y - cur.y2) <= r ? 2 : 0;
-      if (h) { S.drag = { mode: 'uEnd', id: cur.id, h, before: uniSnap(), ...here }; return; }
-    }
-    const hit = uniHit(p);
-    if (hit) {
-      S.usel = hit.id;
-      S.drag = { mode: 'uMove', id: hit.id, p0: p, orig: clone(hit), before: uniSnap(), ...here };
-    } else {
-      S.usel = null;
-      S.drag = { mode: 'pan', cx: e.clientX, cy: e.clientY, vx: S.view.x, vy: S.view.y };
-    }
-    render(); updateUI();
-  }
-  function uniMove(d, p) {
-    const l = uniFind(d.id);
-    if (!l) return;
-    if (d.mode === 'uEnd') {
-      const q = snapPt(p, STEP);
-      if (d.h === 1) { l.x1 = q.x; l.y1 = q.y; } else { l.x2 = q.x; l.y2 = q.y; }
-    } else {
-      if (!d.moved) return;
-      const o = d.orig;
-      const ex = snapOn(o.x1 + p.x - d.p0.x, STEP) - o.x1, ey = snapOn(o.y1 + p.y - d.p0.y, STEP) - o.y1;
-      l.x1 = o.x1 + ex; l.y1 = o.y1 + ey; l.x2 = o.x2 + ex; l.y2 = o.y2 + ey;
-    }
-    uniG.innerHTML = uniSceneSVG();
-    renderOverlay();
-  }
-  function uniAdd(a, b) {
-    if (a.x === b.x && a.y === b.y) return;
-    const l = { id: uid(), x1: a.x, y1: a.y, x2: b.x, y2: b.y, m: clone(S.umark) };
-    umutate(() => uniList().push(l));
-  }
-  function uniUp(d, p, e) {
-    if (d.mode === 'uMove' || d.mode === 'uEnd') {
-      const l = uniFind(d.id);
-      if (l && l.x1 === l.x2 && l.y1 === l.y2) { uniSet(JSON.parse(d.before), false); return; }   // trait réduit à un point : refusé
-      if (uniSnap() !== d.before) {
-        S.uundo.push(d.before); if (S.uundo.length > 100) S.uundo.shift();
-        S.uredo.length = 0;
-        save();
-      }
-      render(); updateUI();
-      return;
-    }
-    // tracé d'un trait
-    const q = snapPt(p, STEP);
-    if (d.fresh) {
-      if (Math.hypot(e.clientX - d.cx, e.clientY - d.cy) > 8) { uniAdd(S.udraft, q); S.udraft = null; }
-    } else if (q.x === S.udraft.x && q.y === S.udraft.y) {
-      S.udraft = null;
-    } else {
-      uniAdd(S.udraft, q);
-      S.udraft = q;
-    }
-    renderOverlay();
-  }
-
-  function uniDelete() {
-    if (!S.usel) return;
-    const id = S.usel;
-    S.usel = null;
-    umutate(() => { const s = schema(); s.uni = uniList().filter((l) => l.id !== id); });
-  }
-  function setUTool(t) {
-    S.utool = t;
-    S.udraft = null; S.drag = null;
+  function addJbox(g) {
+    const it = { id: uid(), t: 'shape', kind: 'square', x: rnd(g.x), y: rnd(g.y), w: rnd(g.w), h: rnd(g.h), rot: 0, mat: 'contour', bd: nextBd() };
+    mutate(() => items().push(it));
+    S.sel = it.id;
     renderOverlay(); updateUI();
   }
-
-  function uniKey(e) {
-    const tag = (e.target && e.target.tagName) || '';
-    if (/INPUT|SELECT|TEXTAREA/.test(tag)) return;
-    const mod = e.ctrlKey || e.metaKey, key = e.key;
-    if (key === ' ' && !/BUTTON/.test(tag)) { S.space = true; e.preventDefault(); return; }
-    if (mod && key.toLowerCase() === 'a') { e.preventDefault(); return; }     // ne pas sélectionner toute la page
-    if (mod && key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? uniRedo() : uniUndo(); return; }
-    if (mod && key.toLowerCase() === 'y') { e.preventDefault(); uniRedo(); return; }
-    if (key === 'Delete' || key === 'Backspace') { if (S.usel) { e.preventDefault(); uniDelete(); } return; }
-    if (key === 'Escape') {
-      if (S.udraft) { S.udraft = null; renderOverlay(); return; }
-      if (S.usel) { S.usel = null; render(); updateUI(); return; }
-      setUTool('select');
-      return;
-    }
-    const l = uniSel();
-    if (l && key.startsWith('Arrow')) {
-      e.preventDefault();
-      const st = e.shiftKey ? GRID : STEP;
-      const dx = key === 'ArrowLeft' ? -st : key === 'ArrowRight' ? st : 0, dy = key === 'ArrowUp' ? -st : key === 'ArrowDown' ? st : 0;
-      umutate(() => { l.x1 += dx; l.x2 += dx; l.y1 += dy; l.y2 += dy; });
-    }
+  function editJbox(it) {
+    const v = window.prompt('Numéro de la boîte de dérivation (BDx) :', String(it.bd));
+    if (v === null) return;
+    const n = Math.round(Number(String(v).trim()));
+    if (!Number.isSafeInteger(n) || n < 0) { window.alert('Entrez un nombre entier positif ou nul (0, 1, 2…).'); return; }
+    mutate(() => { it.bd = n; });
   }
 
-  /* ----- Panneau « Marquage » ----- */
+  /* ----- Panneau « Marquage du trait » (dans la palette, sous-partie Unifilaire) ----- */
   function uniSwatch(kind, color) {
-    const mk = { kind, color, n: 1 };
-    return `<svg viewBox="-14 -12 28 24" width="34" height="28" aria-hidden="true"><line x1="-12" y1="4" x2="12" y2="4" stroke="#000" stroke-width="2"/>${uniMarkSVG(mk, 0, 4, uniSlashDir(1, 0))}</svg>`;
+    return `<svg viewBox="-14 -12 28 24" width="34" height="28" aria-hidden="true"><line x1="-12" y1="4" x2="12" y2="4" stroke="#000" stroke-width="2"/>${uniMarkSVG({ kind, color, n: 1 }, 0, 4, uniSlashDir(1, 0))}</svg>`;
   }
   function uniRow(key, kind, color, name) {
     return `<div class="uni-row" data-uni-row="${key}">${uniSwatch(kind, color)}<span class="uni-name">${esc(name)}</span>` +
       `<button type="button" class="btn btn-ghost btn-sm" data-uni-dec="${key}" aria-label="Retirer un conducteur ${esc(name)}">−</button>` +
-      `<span class="uni-count" data-uni-val="${key}">0</span>` +
+      `<input type="number" class="uni-count" data-uni-val="${key}" min="0" step="1" inputmode="numeric" value="0" aria-label="Nombre : ${esc(name)}">` +
       `<button type="button" class="btn btn-ghost btn-sm" data-uni-inc="${key}" aria-label="Ajouter un conducteur ${esc(name)}">+</button></div>`;
   }
   function uniPanelHTML() {
-    let h = '<p class="sch-group sch-group-main">Marquage du trait</p>' +
+    let h = '<h3 class="sch-group sch-group-main">Marquage du trait</h3>' +
       '<p class="uni-target" id="uni-target"></p>' +
-      '<p class="sch-note">Le nombre est écrit à côté de la marque quand il dépasse 1. À 0, la marque disparaît.</p>' +
-      '<p class="sch-subgroup">Neutre et terre</p>' +
+      '<p class="sch-note">Le nombre (sans limite) peut être tapé directement. Il est écrit à côté de la marque quand il dépasse 1 ; à 0, la marque disparaît.</p>' +
+      '<h4 class="sch-subgroup">Neutre et terre</h4>' +
       uniRow('N', 'N', UNI_NEUTRE, 'Neutre') + uniRow('T', 'T', UNI_TERRE, 'Terre') +
-      '<p class="sch-subgroup">Conducteurs</p>';
+      '<h4 class="sch-subgroup">Conducteurs</h4>';
     for (const k of UNI_COND) h += uniRow(k.c, 'c', k.c, k.name);
     return h;
   }
-  // Valeur d'une marque : trait sélectionné, sinon réglage des prochains traits
+  const selULines = () => selItems().filter((i) => i.t === 'uline' && !i.locked);
   const uniGet = (m, key) => (key === 'N' || key === 'T' ? m[key] || 0 : (m.c && m.c[key]) || 0);
-  function uniChange(key, delta) {
-    const apply = (m) => {
-      if (key === 'N' || key === 'T') m[key] = uniCount((m[key] || 0) + delta, UNI_MAX[key]);
-      else {
-        m.c = m.c || {};
-        const n = uniCount((m.c[key] || 0) + delta, UNI_MAX.c);
-        if (n) m.c[key] = n; else delete m.c[key];
-      }
-    };
-    const l = uniSel();
-    if (l) {                                  // le trait modifié sert aussi de modèle aux prochains traits
-      umutate(() => { l.m = l.m || { c: {}, N: 0, T: 0 }; apply(l.m); });
-      S.umark = clone(l.m);
-      return;
-    }
-    apply(S.umark);
-    updateUI();
+  function uniPut(m, key, n) {
+    if (key === 'N' || key === 'T') m[key] = n;
+    else { m.c = m.c || {}; if (n) m.c[key] = n; else delete m.c[key]; }
   }
+  // Modifie le marquage des traits sélectionnés (sinon celui des prochains traits)
+  function uniApply(key, fn) {
+    const ls = selULines();
+    if (ls.length) {
+      mutate(() => { for (const l of ls) { l.m = l.m || { c: {}, N: 0, T: 0 }; uniPut(l.m, key, fn(uniGet(l.m, key))); } });
+      S.umark = clone(ls[0].m);               // le trait modifié sert de modèle aux prochains traits
+    } else {
+      uniPut(S.umark, key, fn(uniGet(S.umark, key)));
+      updateUI();
+    }
+  }
+  function uniChange(key, delta) { uniApply(key, (n) => uniCount(n + delta)); }
+  function uniSetCount(key, v) { const n = uniCount(v); uniApply(key, () => n); }
   function uniUpdateUI() {
-    root.querySelectorAll('[data-utool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.utool === S.utool)));
-    const l = uniSel();
-    const m = l ? (l.m || {}) : S.umark;
+    const ls = selULines();
+    const m = ls.length ? (ls[0].m || {}) : S.umark;
     root.querySelectorAll('[data-uni-row]').forEach((row) => {
-      const key = row.dataset.uniRow, n = uniGet(m, key), max = key === 'N' || key === 'T' ? UNI_MAX[key] : UNI_MAX.c;
-      row.querySelector('[data-uni-val]').textContent = String(n);
+      const key = row.dataset.uniRow, n = uniGet(m, key);
+      const inp = row.querySelector('[data-uni-val]');
+      if (document.activeElement !== inp) inp.value = String(n);
       row.classList.toggle('is-on', n > 0);
       row.querySelector('[data-uni-dec]').disabled = n <= 0;
-      row.querySelector('[data-uni-inc]').disabled = n >= max;
     });
     const tg = $('#uni-target');
-    if (tg) tg.textContent = l ? 'Trait sélectionné' : 'Prochains traits';
-    $('#uni-undo').disabled = !S.uundo.length;
-    $('#uni-redo').disabled = !S.uredo.length;
-    $('#uni-delete').disabled = !l;
-    $('#sch-hint').textContent = UNI_HINTS[S.utool] || '';
-    svg.style.cursor = S.utool === 'line' ? 'crosshair' : 'default';
-  }
-  let uniBound = false;
-  function uniBind() {
-    if (uniBound) return;
-    uniBound = true;
-    const panel = $('#uni-panel');
-    panel.innerHTML = uniPanelHTML();
-    panel.addEventListener('click', (e) => {
-      const inc = e.target.closest('[data-uni-inc]');
-      if (inc) { uniChange(inc.dataset.uniInc, 1); return; }
-      const dec = e.target.closest('[data-uni-dec]');
-      if (dec) uniChange(dec.dataset.uniDec, -1);
-    });
-    root.querySelectorAll('[data-utool]').forEach((b) => b.addEventListener('click', () => setUTool(b.dataset.utool)));
-    $('#uni-undo').addEventListener('click', uniUndo);
-    $('#uni-redo').addEventListener('click', uniRedo);
-    $('#uni-delete').addEventListener('click', uniDelete);
-    $('#uni-zoom-in').addEventListener('click', () => zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, 1.25));
-    $('#uni-zoom-out').addEventListener('click', () => zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, 0.8));
-    $('#uni-fit').addEventListener('click', fitView);
+    if (tg) tg.textContent = ls.length > 1 ? ls.length + ' traits sélectionnés' : ls.length ? 'Trait sélectionné' : 'Prochains traits';
   }
 
   /* ---------- Entrée publique ---------- */
@@ -2345,7 +2267,6 @@
       if (!db.list.length) newSchema('Schéma 1');
       if (!schema()) db.current = db.list[0].id;
       bind();
-      uniBind();
       const s = schema();
       if (s && s.view) S.view = { ...s.view };
       refreshSelect();
