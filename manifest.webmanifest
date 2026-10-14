@@ -1,7 +1,7 @@
 {
-  "name": "ÉlectroFormules",
-  "short_name": "ÉlectroFormules",
-  "description": "Formules d'électrotechnique et calculateurs",
+  "name": "ElecPourTous",
+  "short_name": "ElecPourTous",
+  "description": "Formules d'électrotechnique, calculateurs, schémas et désignation des matériels",
   "lang": "fr",
   "start_url": "./index.html",
   "scope": "./",

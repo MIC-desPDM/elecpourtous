@@ -2,7 +2,7 @@
 <html lang="fr" data-theme="dark"><head><meta charset="UTF-8">
   
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ÉlectroFormules — Formules d'électrotechnique et calculateurs</title>
+  <title>ElecPourTous — Formules d'électrotechnique, schémas et désignation</title>
   <meta name="description" content="Bibliothèque de formules d'électrotechnique avec calculateurs interactifs : lois fondamentales, courant alternatif, triphasé, moteurs, transformateurs. Ajoutez vos propres formules.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23b4540a'/%3E%3Cpath d='M17.5 5 9 18h5.5L13 27l9-14h-5.5L17.5 5z' fill='%23fff7ec'/%3E%3C/svg%3E">
   <link rel="manifest" href="manifest.webmanifest">
@@ -23,7 +23,7 @@
           <path d="M17.5 5 9 18h5.5L13 27l9-14h-5.5L17.5 5z" class="brand-bolt"></path>
         </svg>
         <div class="brand-text">
-          <h1 class="brand-name">ÉlectroFormules</h1>
+          <h1 class="brand-name">ElecPourTous</h1>
           <p class="brand-tag">Électrotechnique · Bac Pro MELEC</p>
         </div>
       </div>
@@ -39,6 +39,7 @@
       <div class="view-tabs-inner" role="tablist">
         <button type="button" role="tab" class="view-tab" data-view-tab="formulas" aria-selected="true">Formules de MELEC</button>
         <button type="button" role="tab" class="view-tab" data-view-tab="schemas" aria-selected="false">Schémas</button>
+        <button type="button" role="tab" class="view-tab" data-view-tab="designation" aria-selected="false">Désignation MELEC</button>
       </div>
     </nav>
   </header>
@@ -192,6 +193,90 @@
       </div>
     </div>
     <p class="sch-hint" id="sch-hint"></p>
+  </main>
+
+  <!-- ===== Section : Désignation MELEC (repérage des matériels) ===== -->
+  <main id="main-designation" class="designation-main" data-view="designation" hidden>
+    <p class="des-soon" role="status"><strong>À venir</strong> — cette partie sera complétée prochainement.</p>
+
+    <header class="des-head">
+      <h2>Désignation des matériels électriques</h2>
+      <p class="des-intro">Un repère se lit en trois parties : <strong>la première lettre</strong> (famille d’élément), <strong>la deuxième lettre</strong> (fonction) et <strong>un numéro</strong> choisi par l’utilisateur.</p>
+      <div class="des-example" aria-label="Exemple de repère">
+        <span class="des-code"><span class="des-c1">K</span><span class="des-c2">M</span><span class="des-c3">2</span></span>
+        <span><span class="des-c1">K</span> : contacteur · <span class="des-c2">M</span> : principal · <span class="des-c3">2</span> : 2<sup>e</sup> contacteur principal du circuit</span>
+      </div>
+    </header>
+
+    <section class="des-block" aria-labelledby="des-t1">
+      <h3 id="des-t1"><span class="des-step des-c1">1</span> La première lettre désigne une famille ou sorte d’élément</h3>
+      <div class="des-table-wrap">
+        <table class="des-table">
+          <thead><tr><th scope="col">Lettre</th><th scope="col">Famille d’éléments</th><th scope="col">Exemples</th></tr></thead>
+          <tbody>
+            <tr><th scope="row" class="des-letter">A</th><td>Ensembles et sous-ensembles fonctionnels</td><td>Amplificateur, régulateur, automate programmable</td></tr>
+            <tr><th scope="row" class="des-letter">B</th><td>Transducteurs : dispositifs transformant une grandeur non électrique en grandeur électrique, ou inversement</td><td>Thermostat, cellule photoélectrique, thermocouple, pressostat, détecteur photoélectrique</td></tr>
+            <tr><th scope="row" class="des-letter">C</th><td>Condensateurs</td><td>Aucun exemple précisé, condensateur de démarrage, condensateur permanent</td></tr>
+            <tr><th scope="row" class="des-letter">D</th><td>Opérateurs binaires, dispositifs de temporisation et de mémoire</td><td>Opérateur combinatoire, bascule bistable, monostable, bascule RS, ligne à retard, mémoire magnétique</td></tr>
+            <tr><th scope="row" class="des-letter">E</th><td>Matériels divers</td><td>Éclairage, chauffage, éléments non spécifiés dans les autres familles du tableau</td></tr>
+            <tr><th scope="row" class="des-letter">F</th><td>Dispositifs de protection</td><td>Coupe-circuit à fusible, relais de protection, relais thermique, parafoudre, limiteur de surtension</td></tr>
+            <tr><th scope="row" class="des-letter">G</th><td>Générateurs et dispositifs d’alimentation</td><td>Génératrice, alternateur, batterie, pile, alimentation électrique, oscillateur à quartz</td></tr>
+            <tr><th scope="row" class="des-letter">H</th><td>Dispositifs de signalisation</td><td>Avertisseur lumineux, avertisseur sonore, voyant lumineux, sonnerie, buzzer</td></tr>
+            <tr><th scope="row" class="des-letter">K</th><td>Relais et contacteurs</td><td>Relais auxiliaire, relais d’automatisme, relais temporisé, contacteur de puissance</td></tr>
+            <tr><th scope="row" class="des-letter">L</th><td>Inductances</td><td>Bobine d’induction. Bobine de blocage</td></tr>
+            <tr><th scope="row" class="des-letter">M</th><td>Moteurs</td><td>Moteurs électriques de tous types</td></tr>
+            <tr><th scope="row" class="des-letter">P</th><td>Instruments de mesure et dispositifs d’essai</td><td>Appareil indicateur, appareil enregistreur, compteur, commutateur horaire, appareil de mesure, horloge</td></tr>
+            <tr><th scope="row" class="des-letter">Q</th><td>Appareils mécaniques de connexion pour les circuits de puissance</td><td>Disjoncteur, sectionneur, interrupteur, commutateur</td></tr>
+            <tr><th scope="row" class="des-letter">R</th><td>Résistances</td><td>Résistance, shunt, potentiomètre, rhéostat, thermistance</td></tr>
+            <tr><th scope="row" class="des-letter">S</th><td>Appareils mécaniques de connexion pour les circuits de commande</td><td>Bouton-poussoir, interrupteur de fin de course, sélecteur, interrupteur de commande</td></tr>
+            <tr><th scope="row" class="des-letter">T</th><td>Transformateurs</td><td>Transformateur de tension, transformateur de courant</td></tr>
+            <tr><th scope="row" class="des-letter">U</th><td>Modulateurs et convertisseurs</td><td>Convertisseur de fréquence, convertisseur-redresseur, onduleur</td></tr>
+            <tr><th scope="row" class="des-letter">V</th><td>Tubes électroniques et semi-conducteurs</td><td>Tube à gaz, diode</td></tr>
+            <tr><th scope="row" class="des-letter">W</th><td>Voies de transmission, guides d’onde et antennes</td><td>Câble, jeu de barres, antenne, guide d’onde</td></tr>
+            <tr><th scope="row" class="des-letter">X</th><td>Bornes, fiches et socles</td><td>Aucun exemple précisé, fiche et prise de connexion, planchette à bornes, fiche d’essai, bornier</td></tr>
+            <tr><th scope="row" class="des-letter">Y</th><td>Appareils mécaniques actionnés électriquement</td><td>Frein, embrayage, gâche électrique, électrovanne, électroaimant</td></tr>
+            <tr><th scope="row" class="des-letter">Z</th><td>Charges correctives, transformateurs différentiels, filtres, correcteurs et limiteurs</td><td>Equilibreur, correcteur, filtre</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="des-block" aria-labelledby="des-t2">
+      <h3 id="des-t2"><span class="des-step des-c2">2</span> La deuxième lettre désigne la fonction de l’élément</h3>
+      <div class="des-table-wrap">
+        <table class="des-table des-table-2">
+          <thead><tr><th scope="col">Lettre</th><th scope="col">Fonction</th></tr></thead>
+          <tbody>
+            <tr><th scope="row" class="des-letter">A</th><td>Auxiliaire</td></tr>
+            <tr><th scope="row" class="des-letter">B</th><td>Direction de mouvement (avant, arrière)</td></tr>
+            <tr><th scope="row" class="des-letter">C</th><td>Comptage numérique</td></tr>
+            <tr><th scope="row" class="des-letter">D</th><td>Différentiel</td></tr>
+            <tr><th scope="row" class="des-letter">F</th><td>Protection</td></tr>
+            <tr><th scope="row" class="des-letter">G</th><td>Essai</td></tr>
+            <tr><th scope="row" class="des-letter">H</th><td>Signalisation</td></tr>
+            <tr><th scope="row" class="des-letter">J</th><td>Intégration</td></tr>
+            <tr><th scope="row" class="des-letter">K</th><td>Approche (ex : niveau)</td></tr>
+            <tr><th scope="row" class="des-letter">M</th><td>Principal</td></tr>
+            <tr><th scope="row" class="des-letter">N</th><td>Mesure</td></tr>
+            <tr><th scope="row" class="des-letter">P</th><td>Proportionnel</td></tr>
+            <tr><th scope="row" class="des-letter">Q</th><td>Démarrage, d’arrêt, de fin de course</td></tr>
+            <tr><th scope="row" class="des-letter">R</th><td>Réarmement, effacement</td></tr>
+            <tr><th scope="row" class="des-letter">S</th><td>Mise en mémoire, enregistrement</td></tr>
+            <tr><th scope="row" class="des-letter">T</th><td>Temporisation</td></tr>
+            <tr><th scope="row" class="des-letter">V</th><td>Vitesse (accélération)</td></tr>
+            <tr><th scope="row" class="des-letter">W</th><td>Additionneur</td></tr>
+            <tr><th scope="row" class="des-letter">X</th><td>Multiplicateur</td></tr>
+            <tr><th scope="row" class="des-letter">Y</th><td>Analogique</td></tr>
+            <tr><th scope="row" class="des-letter">Z</th><td>Numérique</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="des-block" aria-labelledby="des-t3">
+      <h3 id="des-t3"><span class="des-step des-c3">3</span> La troisième partie est un numéro choisi par l’utilisateur</h3>
+      <p class="des-text">Exemple : <strong>KM2</strong> — <span class="des-c1">K</span> : contacteur, <span class="des-c2">M</span> : principal, <span class="des-c3">2</span> : 2<sup>e</sup> contacteur principal du circuit.</p>
+    </section>
   </main>
 
   <footer class="site-footer" data-view="formulas">

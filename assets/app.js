@@ -1,5 +1,5 @@
 /* ============================================================
-   ÉlectroFormules — app.js
+   ElecPourTous — app.js
    Bibliothèque + calculateur de formules d'électrotechnique
    ============================================================ */
 'use strict';
@@ -1521,7 +1521,7 @@ if ('serviceWorker' in navigator) {
 }
 
 
-/* ---------- Sections (onglets) : Formules de MELEC / Schémas ---------- */
+/* ---------- Sections (onglets) : Formules de MELEC / Schémas / Désignation MELEC ---------- */
 (function () {
   const tabs = [...document.querySelectorAll('[data-view-tab]')];
   const searchWrap = document.querySelector('.search-wrap');
@@ -1534,6 +1534,6 @@ if ('serviceWorker' in navigator) {
   }
   tabs.forEach((t) => t.addEventListener('click', () => showView(t.dataset.viewTab)));
   let start = 'formulas';
-  try { if (window.localStorage.getItem('ef_view') === 'schemas') start = 'schemas'; } catch (e) { /* ignoré */ }
+  try { const v = window.localStorage.getItem('ef_view'); if (tabs.some((t) => t.dataset.viewTab === v)) start = v; } catch (e) { /* ignoré */ }
   showView(start);
 })();
