@@ -1555,8 +1555,8 @@ if ('serviceWorker' in navigator) {
     name: r.cells[1].textContent.trim(),
     items: r.cells[2].textContent.split(/[,.]\s*/).map((x) => x.trim()).filter((x) => x && !/^aucun exemple/i.test(x)),
   }));
-  // Mots supplémentaires reconnus pour la 2e lettre
-  const ALIAS2 = { M: ['moteur'] };
+  // Mots supplémentaires reconnus pour la 2e lettre (aucun pour l'instant)
+  const ALIAS2 = {};
   const funcs = tables[1] ? [...tables[1].tBodies[0].rows].map((r) => {
     const letter = r.cells[0].textContent.trim();
     return { letter, name: r.cells[1].textContent.trim(), alias: ALIAS2[letter] || [] };
@@ -1602,10 +1602,32 @@ if ('serviceWorker' in navigator) {
     return res.sort((a, b) => b.score - a.score);
   }
 
+  // Recherche inverse : un repère tapé (ex. KM1) donne sa signification
+  const famBy = (l) => fams.find((f) => f.letter === l);
+  const funcBy = (l) => funcs.find((x) => x.letter === l);
+  function reverse(raw) {
+    const m = /^([a-z])([a-z])?\s*(\d+)?$/i.exec(raw.trim());
+    if (!m) return null;
+    const l1 = m[1].toUpperCase(), l2 = m[2] ? m[2].toUpperCase() : '', num = m[3] || '';
+    const f = famBy(l1), fn = l2 ? funcBy(l2) : null;
+    if (!f || (l2 && !fn)) return null;                 // pas un repère valide : recherche par mots
+    if (!l2 && !num && raw.trim().length > 1) return null;
+    const names = [f.name, fn ? fn.name : null, num || null].filter(Boolean);
+    let h = `<div class="des-build des-reverse"><div class="des-build-code" aria-label="Repère">` +
+      `<span class="des-c1">${l1}</span>${l2 ? `<span class="des-c2">${l2}</span>` : ''}${num ? `<span class="des-c3">${escH(num)}</span>` : ''}</div>` +
+      `<p class="des-meaning">${names.map((n, i) => `<span class="des-c${[1, fn ? 2 : 3, 3][i]}">${escH(n)}</span>`).join(' <span class="des-sep">-</span> ')}</p><ul class="des-parts">` +
+      `<li class="des-part"><span class="des-part-l des-c1">${l1}</span><span>${escH(f.name)}` +
+      (f.items.length ? ` <span class="des-part-q">— ${escH(f.items.join(', '))}</span>` : '') + '</span></li>';
+    if (fn) h += `<li class="des-part"><span class="des-part-l des-c2">${l2}</span><span>${escH(fn.name)}</span></li>`;
+    if (num) h += `<li class="des-part"><span class="des-part-l des-c3">${escH(num)}</span><span>numéro choisi par l’utilisateur</span></li>`;
+    return h + '</ul></div>';
+  }
+
   const picks = {};        // choix faits parmi les autres lettres possibles, par groupe
   function search() {
     const raw = input.value;
     if (!raw.trim()) { out.innerHTML = ''; return; }
+    if (!raw.includes('-')) { const r = reverse(raw); if (r) { out.innerHTML = r; return; } }
     const groups = raw.split('-').map((g) => g.trim());
     const parts = [];
     let code = '';

@@ -955,3 +955,5 @@ dialog h2 {
 }
 .des-alt:hover { border-color: var(--accent); color: var(--accent); }
 .des-alt b { font-family: var(--font-mono); }
+.des-meaning { font-size: 1.0625rem; font-weight: 600; }
+.des-meaning .des-sep { color: var(--text-faint); font-weight: 400; }
