@@ -190,7 +190,9 @@
         <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="step" aria-pressed="false">Étape</button>
         <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="trans" aria-pressed="false">Transition</button>
         <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="act" aria-pressed="false" title="Cliquez sur une étape pour lui ajouter une action">Action</button>
-        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="link" aria-pressed="false" title="Faites glisser d'une étape vers une transition, ou d'une transition vers une étape">Liaison</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="wire" aria-pressed="false" title="Tracer un trait : départ, coudes, arrivée (segments horizontaux / verticaux)">Trait</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" id="gf-dbl" aria-pressed="false" title="Trait double (divergence / convergence en ET) : pour les prochains traits ou les traits sélectionnés">Trait double</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-gtool="arrow" aria-pressed="false" title="Poser une flèche sur un trait (toucher la flèche l'inverse, puis la retire)">Flèche</button>
         <span class="sch-sep"></span>
         <label class="sch-snap"><input type="checkbox" id="gf-snap" checked> Grille magnétique</label>
         <span class="sch-sep"></span>
@@ -213,11 +215,12 @@
       </div>
 
       <div class="sch-bgbar" role="toolbar" aria-label="Disposition">
+        <button type="button" class="btn btn-primary btn-sm" id="gf-order" title="Range les étapes sélectionnées en colonne, toutes au même écart, avec leurs transitions au milieu">Ordonner</button>
         <span class="sch-bglabel">Écart entre les étapes</span>
         <button type="button" class="btn btn-ghost btn-sm" id="gf-gap-m" aria-label="Réduire l'écart entre les étapes">− écart</button>
         <span class="sch-thval" id="gf-gap-val">100</span>
         <button type="button" class="btn btn-ghost btn-sm" id="gf-gap-p" aria-label="Augmenter l'écart entre les étapes">+ écart</button>
-        <span class="sch-wallhint">S’applique aux éléments face à face (même colonne) ; les liaisons décalées sont libres et portent une flèche.</span>
+        <span class="sch-wallhint">Utilisé par « Ordonner » : sélectionnez plusieurs étapes, puis Ordonner.</span>
       </div>
 
       <div class="sch-bgbar" role="toolbar" aria-label="Calque de référence">

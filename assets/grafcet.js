@@ -3,7 +3,9 @@
    - Un seul cycle par projet (schema.grafcet) : étapes, transitions, actions et liaisons sont
      communs aux quatre points de vue. Seuls les textes changent d'un point de vue à l'autre.
    - Données : schema.grafcet = {
-       items: [ {id,t:'step',x,y,n,init?}, {id,t:'trans',x,y}, {id,t:'act',step,ord}, {id,t:'link',a,b} ],
+       items: [ {id,t:'step',x,y,n,init?}, {id,t:'trans',x,y}, {id,t:'act',step,ord},
+                {id,t:'wire',pts:[[x,y],…],dbl?,a?:{id,port},b?:{id,port},arrows?:[{seg,f,rev}]} ],
+       Les traits sont dessinés à la main ; leurs extrémités accrochées à une étape ou une transition la suivent.
        tx: { systeme: {id: texte}, operative: {...}, commande: {...}, automate: {...} } }
    - Point de vue Commande : chaque action et chaque réceptivité doit porter une désignation
      (ex. KM1, S1). Sinon un panneau « ! » l'indique (écran seulement, jamais dans les exports).
@@ -66,7 +68,7 @@
   } catch (e) { /* ignoré */ }
 
   /* ---------- Données ---------- */
-  function emptyG() { return { items: [], tx: { systeme: {}, operative: {}, commande: {}, automate: {} }, v27: true }; }
+  function emptyG() { return { items: [], tx: { systeme: {}, operative: {}, commande: {}, automate: {} }, v27: true, v28: true }; }
   function G() {
     const api = API(), s = api && api.schema();
     if (!s) return null;
@@ -99,8 +101,17 @@
       if (!it || typeof it.id !== 'string') continue;
       if (it.t === 'act' && ids.has(it.step)) { g.items.push({ id: it.id, t: 'act', step: it.step, ord: num(it.ord) ? it.ord : 0, ...(it.locked === true ? { locked: true } : {}) }); ids.add(it.id); }
       if (it.t === 'link' && ids.has(it.a) && ids.has(it.b)) g.items.push({ id: it.id, t: 'link', a: it.a, b: it.b, ...(it.up === true ? { up: true } : {}) });
+      if (it.t === 'wire' && Array.isArray(it.pts) && it.pts.length >= 2 && it.pts.length <= 200) {
+        const pts = it.pts.map((q) => (Array.isArray(q) && num(q[0]) && num(q[1]) ? [q[0], q[1]] : null));
+        if (pts.some((q) => !q)) continue;
+        const end = (e) => (e && ids.has(e.id) && ['top', 'bot', 'c'].includes(e.port) ? { id: e.id, port: e.port } : null);
+        const a = end(it.a), b = end(it.b);
+        const arrows = Array.isArray(it.arrows) ? it.arrows.filter((r) => r && num(r.seg) && num(r.f)).map((r) => ({ seg: Math.max(0, Math.round(r.seg)), f: Math.max(0, Math.min(1, r.f)), ...(r.rev ? { rev: true } : {}) })) : [];
+        g.items.push({ id: it.id, t: 'wire', pts, ...(it.dbl ? { dbl: true } : {}), ...(a ? { a } : {}), ...(b ? { b } : {}), ...(arrows.length ? { arrows } : {}), ...(it.locked === true ? { locked: true } : {}) });
+      }
     }
     g.v27 = !!raw.v27;                                // fichier ancien : ses renvois seront reconnus à l'ouverture
+    g.v28 = !!raw.v28;
     if (num(raw.gap)) g.gap = Math.max(GAP_MIN, Math.min(GAP_MAX, Math.round(raw.gap / 10) * 10));
     const tx = raw.tx || {};
     for (const v of VIEWS) {
@@ -120,7 +131,7 @@
   function mutate(fn) {
     const before = snap();
     fn();
-    relayout();
+    syncWires();
     if (snap() === before) { render(); updateUI(); return; }
     pushUndo(before);
     save(); render(); updateUI();
@@ -135,79 +146,197 @@
   function doUndo() { if (!S.undo.length) return; S.redo.push(snap()); restore(S.undo.pop()); }
   function doRedo() { if (!S.redo.length) return; S.undo.push(snap()); restore(S.redo.pop()); }
 
-  /* ---------- Disposition par blocs ----------
-     Deux éléments reliés et face à face (même colonne, liaison descendante, pas un renvoi) forment un bloc :
-     dans un bloc, l'écart entre deux étapes est toujours le même (réglage « écart »). Une liaison décalée
-     n'impose rien : chaque bloc garde la position où on l'a posé et se déplace librement. */
-  const FACE_TOL = 0.5;
-  function rigid(l, byId) {
-    const a = byId[l.a], b = byId[l.b];
-    return !!a && !!b && !l.up && Math.abs(a.x - b.x) < FACE_TOL;
+  /* ---------- Traits (liaisons dessinées à la main) ----------
+     Un trait est une suite de segments horizontaux / verticaux. Une extrémité peut être accrochée au
+     milieu du haut (top) ou du bas (bot) d'une étape, ou au centre (c) d'une transition : elle suit
+     alors l'élément quand on le déplace, le segment voisin s'adaptant pour rester droit. */
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  function portPos(n, port) {
+    if (n.t === 'trans') return [n.x, n.y];
+    return [n.x, port === 'top' ? n.y - STEP_H : n.y + STEP_H];
   }
-  function relayout() {
+  // Déplace l'extrémité d'un trait en gardant ses segments horizontaux / verticaux
+  function setEnd(w, which, P) {
+    const pts = w.pts, last = pts.length - 1, idx = which === 'a' ? 0 : last, nb = which === 'a' ? 1 : last - 1;
+    const old = pts[idx];
+    if (old[0] === P[0] && old[1] === P[1]) return;
+    if (pts.length === 2) {
+      pts[idx] = [P[0], P[1]];
+      const p0 = pts[0], p1 = pts[1];
+      if (p0[0] !== p1[0] && p0[1] !== p1[1]) {        // plus droit : on ajoute un coude
+        const m = rnd((p0[1] + p1[1]) / 2);
+        w.pts = [p0, [p0[0], m], [p1[0], m], p1];
+        if (w.arrows) for (const r of w.arrows) r.seg = 1;
+      }
+      return;
+    }
+    const nb2 = which === 'a' ? 2 : last - 2;
+    if (pts.length >= 5) {                             // tracé à plusieurs coudes : le premier segment garde sa longueur
+      const dx = P[0] - old[0], dy = P[1] - old[1], q = pts[nb], r = pts[nb2];
+      if (q[0] === r[0]) r[0] += dx; else r[1] += dy;
+      q[0] += dx; q[1] += dy;
+      pts[idx] = [P[0], P[1]];
+      return;
+    }
+    if (old[0] === pts[nb][0]) pts[nb][0] = P[0];      // segment vertical : il glisse de côté
+    else if (old[1] === pts[nb][1]) pts[nb][1] = P[1]; // segment horizontal : il monte ou descend
+    pts[idx] = [P[0], P[1]];
+  }
+  // Retire les points inutiles (doublons, points au milieu d'une ligne droite) en gardant les flèches
+  function simplify(w) {
+    let k = 1;
+    while (k < w.pts.length - 1 && w.pts.length > 2) {
+      const a = w.pts[k - 1], b = w.pts[k], c = w.pts[k + 1];
+      const dup = a[0] === b[0] && a[1] === b[1];
+      const line = (a[0] === b[0] && b[0] === c[0]) || (a[1] === b[1] && b[1] === c[1]);
+      if (dup || line) {
+        w.pts.splice(k, 1);
+        if (w.arrows) for (const r of w.arrows) if (r.seg >= k) r.seg--;
+      } else k++;
+    }
+    if (w.pts.length === 2 && w.pts[0][0] === w.pts[1][0] && w.pts[0][1] === w.pts[1][1]) return;
+    const n = w.pts.length - 1;
+    if (n >= 1 && w.pts[n][0] === w.pts[n - 1][0] && w.pts[n][1] === w.pts[n - 1][1] && n > 1) { w.pts.splice(n - 1, 1); if (w.arrows) for (const r of w.arrows) r.seg = Math.min(r.seg, w.pts.length - 2); }
+  }
+  // Remet les extrémités accrochées sur leurs éléments (après un déplacement, « Ordonner », etc.)
+  function syncWires(skip) {
     const g = G();
     if (!g) return;
-    const nodes = g.items.filter((i) => i.t === 'step' || i.t === 'trans');
     const byId = {};
-    for (const n of nodes) byId[n.id] = n;
-    const rl = g.items.filter((l) => l.t === 'link' && rigid(l, byId));
-    if (!rl.length) return;
-    const out = {}, indeg = {};
-    for (const n of nodes) { out[n.id] = []; indeg[n.id] = 0; }
-    for (const l of rl) { out[l.a].push(l.b); indeg[l.b]++; }
-    // blocs
-    const parent = {};
-    const findP = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
-    for (const n of nodes) parent[n.id] = n.id;
-    for (const l of rl) parent[findP(l.a)] = findP(l.b);
-    // rang dans le bloc : plus long chemin depuis le haut du bloc
-    const rank = {}, left = {};
-    for (const n of nodes) left[n.id] = indeg[n.id];
-    const queue = nodes.filter((n) => !indeg[n.id]).map((n) => n.id);
-    for (const id of queue) rank[id] = 0;
-    while (queue.length) {
-      const id = queue.shift();
-      for (const b of out[id]) { rank[b] = Math.max(rank[b] || 0, rank[id] + 1); if (--left[b] === 0) queue.push(b); }
+    for (const it of g.items) byId[it.id] = it;
+    for (const w of g.items) {
+      if (w.t !== 'wire' || (skip && skip.has(w.id))) continue;
+      for (const k of ['a', 'b']) {
+        const e = w[k];
+        if (!e) continue;
+        const n = byId[e.id];
+        if (!n) { delete w[k]; continue; }
+        setEnd(w, k, portPos(n, e.port));
+      }
+      simplify(w);
     }
-    const anchor = {};
-    for (const n of nodes) if (!indeg[n.id]) { const c = findP(n.id); anchor[c] = anchor[c] === undefined ? n.y : Math.min(anchor[c], n.y); }
+  }
+  // Points d'accroche pour tracer : raccordements des étapes et transitions, sommets et segments des traits
+  function snapWire(p, skipId) {
+    const R = 12 / S.cam.k;
+    let best = null;
+    const take = (x, y, att, prio) => {
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d <= R && (!best || prio > best.prio || (prio === best.prio && d < best.d))) best = { x: rnd(x), y: rnd(y), att, d, prio };
+    };
+    for (const n of items()) {
+      if (n.t === 'step') { take(n.x, n.y - STEP_H, { id: n.id, port: 'top' }, 3); take(n.x, n.y + STEP_H, { id: n.id, port: 'bot' }, 3); }
+      else if (n.t === 'trans') take(n.x, n.y, { id: n.id, port: 'c' }, 3);
+    }
+    if (best) return best;
+    for (const w of items()) {
+      if (w.t !== 'wire' || w.id === skipId) continue;
+      for (const q of w.pts) take(q[0], q[1], null, 2);
+      for (let k = 0; k < w.pts.length - 1; k++) {
+        const a = w.pts[k], b = w.pts[k + 1];
+        if (a[0] === b[0] && p.y >= Math.min(a[1], b[1]) && p.y <= Math.max(a[1], b[1])) take(a[0], snapV(p.y), null, 1);
+        else if (a[1] === b[1] && p.x >= Math.min(a[0], b[0]) && p.x <= Math.max(a[0], b[0])) take(snapV(p.x), a[1], null, 1);
+      }
+    }
+    if (best) return { ...best, onWire: true };
+    return { x: snapV(p.x), y: snapV(p.y), att: null };
+  }
+  function finishWire() {
+    const d = S.wdraft;
+    S.wdraft = null;
+    if (!d || d.pts.length < 2) { renderOverlay(); return; }
+    const tmp = { pts: d.pts.map((q) => q.slice()) };
+    simplify(tmp);
+    const pts = tmp.pts;
+    if (pts.length < 2 || (pts.length === 2 && pts[0][0] === pts[1][0] && pts[0][1] === pts[1][1])) { renderOverlay(); return; }
+    const w = { id: uid(), t: 'wire', pts, ...(S.wireDbl ? { dbl: true } : {}), ...(d.a ? { a: d.a } : {}), ...(d.b ? { b: d.b } : {}) };
+    mutate(() => items().push(w));
+    S.sel = w.id;
+    render(); updateUI();
+  }
+  // Point suivant d'un trait : toujours horizontal ou vertical par rapport au précédent
+  function orthoNext(last, q) {
+    return Math.abs(q.x - last[0]) >= Math.abs(q.y - last[1]) ? [q.x, last[1]] : [last[0], q.y];
+  }
+  function wireDown(p) {
+    const q = snapWire(p);
+    const d = S.wdraft;
+    if (!d) { S.wdraft = { pts: [[q.x, q.y]], a: q.att || null }; renderOverlay(); return; }
+    const last = d.pts[d.pts.length - 1];
+    if (q.att || q.onWire) {                         // arrivée sur un élément ou un autre trait : le trait se termine
+      if (last[0] !== q.x && last[1] !== q.y) d.pts.push(q.att && q.att.port !== 'c' ? [q.x, last[1]] : orthoNext(last, q));
+      const l2 = d.pts[d.pts.length - 1];
+      if (l2[0] !== q.x && l2[1] !== q.y) d.pts.push([q.x, l2[1]]);
+      d.pts.push([q.x, q.y]);
+      d.b = q.att || null;
+      finishWire();
+      return;
+    }
+    const nx = orthoNext(last, q);
+    if (nx[0] === last[0] && nx[1] === last[1]) { finishWire(); return; }   // même point : fin du trait
+    d.pts.push(nx);
+    renderOverlay();
+  }
+  // Flèches posées à la main sur un trait : 1er appui = flèche, 2e = sens inversé, 3e = retirée
+  function arrowPos(w, r) {
+    const k = Math.min(r.seg, w.pts.length - 2), a = w.pts[k], b = w.pts[k + 1];
+    return { x: a[0] + (b[0] - a[0]) * r.f, y: a[1] + (b[1] - a[1]) * r.f, dx: Math.sign(b[0] - a[0]) * (r.rev ? -1 : 1), dy: Math.sign(b[1] - a[1]) * (r.rev ? -1 : 1) };
+  }
+  function arrowDown(p) {
+    const tol = 9 / S.cam.k;
+    const ws = items().filter((w) => w.t === 'wire');
+    for (const w of ws) {
+      for (let i = 0; i < (w.arrows || []).length; i++) {
+        const q = arrowPos(w, w.arrows[i]);
+        if (Math.hypot(p.x - q.x, p.y - q.y) <= tol) {
+          if (w.locked) { hint('Trait figé : libérez-le pour modifier ses flèches.'); return; }
+          mutate(() => { if (!w.arrows[i].rev) w.arrows[i].rev = true; else { w.arrows.splice(i, 1); if (!w.arrows.length) delete w.arrows; } });
+          return;
+        }
+      }
+    }
+    let best = null;
+    for (const w of ws) {
+      for (let k = 0; k < w.pts.length - 1; k++) {
+        const a = w.pts[k], b = w.pts[k + 1], d = distSeg(p, a, b);
+        if (d <= tol && (!best || d < best.d)) {
+          const L2 = (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2;
+          const f = L2 ? Math.max(0.1, Math.min(0.9, ((p.x - a[0]) * (b[0] - a[0]) + (p.y - a[1]) * (b[1] - a[1])) / L2)) : 0.5;
+          best = { w, k, f: Math.round(f * 20) / 20, d };
+        }
+      }
+    }
+    if (!best) { hint('Flèche : touchez un trait pour y poser une flèche.'); return; }
+    if (best.w.locked) { hint('Trait figé : libérez-le pour lui ajouter une flèche.'); return; }
+    mutate(() => { (best.w.arrows = best.w.arrows || []).push({ seg: best.k, f: best.f }); });
+  }
+  // « Ordonner » : étapes sélectionnées en colonne, toutes à l'écart réglé, transitions au milieu de chaque intervalle
+  function orderSel() {
+    const sel = selItems().filter((i) => (i.t === 'step' || i.t === 'trans') && !i.locked);
+    const steps = sel.filter((i) => i.t === 'step').sort((a, b) => a.y - b.y || a.x - b.x);
+    if (!steps.length || sel.length < 2) { hint('Ordonner : sélectionnez au moins deux étapes (Sélection multiple ou rectangle).'); return; }
+    const colX = steps[0].x;
+    const set = new Set(sel.map((i) => i.id));
+    // transitions placées entre deux étapes sélectionnées, près de la colonne : rangées avec elles
+    for (let i = 0; i < steps.length - 1; i++) {
+      const a = steps[i], b = steps[i + 1];
+      for (const t of items()) {
+        if (t.t !== 'trans' || t.locked || set.has(t.id)) continue;
+        if (t.y > a.y && t.y < b.y && Math.abs(t.x - a.x) <= 60) set.add(t.id);
+      }
+    }
+    const list = items().filter((i) => set.has(i.id)).sort((a, b) => a.y - b.y || a.x - b.x);
     const half = gap() / 2;
-    for (const n of nodes) {
-      const c = findP(n.id);
-      if (rank[n.id] === undefined || anchor[c] === undefined || left[n.id] > 0) continue;   // boucle éventuelle : on ne touche pas
-      n.y = rnd(anchor[c] + rank[n.id] * half);
-    }
-  }
-  // Blocs (éléments face à face) contenant les éléments donnés
-  function blocksOf(ids) {
-    const all = items(), byId = {};
-    for (const n of all) if (n.t === 'step' || n.t === 'trans') byId[n.id] = n;
-    const rl = all.filter((l) => l.t === 'link' && rigid(l, byId));
-    const seen = new Set(ids), stack = [...ids];
-    while (stack.length) {
-      const id = stack.pop();
-      for (const l of rl) {
-        const o = l.a === id ? l.b : l.b === id ? l.a : null;
-        if (o && !seen.has(o)) { seen.add(o); stack.push(o); }
+    mutate(() => {
+      let y = list[0].y, prev = null;
+      for (const n of list) {
+        if (prev) y += (prev.t === 'step' && n.t === 'step') ? gap() : half;
+        n.x = colX; n.y = rnd(y);
+        prev = n;
       }
-    }
-    return Object.values(byId).filter((n) => seen.has(n.id));
+    });
+    hint(`${list.length} élément${list.length > 1 ? 's' : ''} ordonné${list.length > 1 ? 's' : ''} (écart ${gap()}).`);
   }
-  // Aimant : un élément reposé presque sous (ou sur) un élément relié se cale dans sa colonne
-  function magnet(moved) {
-    const all = items(), byId = {};
-    for (const n of all) if (n.t === 'step' || n.t === 'trans') byId[n.id] = n;
-    const ids = new Set(moved.map((n) => n.id));
-    for (const n of moved) {
-      for (const l of all) {
-        if (l.t !== 'link' || l.up) continue;
-        const o = l.a === n.id ? byId[l.b] : l.b === n.id ? byId[l.a] : null;
-        if (!o || ids.has(o.id)) continue;
-        if (Math.abs(o.x - n.x) <= 14 && Math.abs(o.x - n.x) > 0) { n.x = o.x; break; }
-      }
-    }
-  }
-  // Emplacement libre (aucune étape ni transition à moins de 20 unités)
   function freeAt(x, y, skip) {
     return !items().some((n) => (n.t === 'step' || n.t === 'trans') && n.id !== skip && Math.abs(n.x - x) < 20 && Math.abs(n.y - y) < 20);
   }
@@ -252,6 +381,46 @@
     const v = Math.max(GAP_MIN, Math.min(GAP_MAX, gap() + 10 * dir));
     if (v === gap()) return;
     mutate(() => { g.gap = v; });
+    hint(`Écart : ${v}. Il s’applique quand vous utilisez « Ordonner ».`);
+  }
+  // Anciennes liaisons automatiques (v22 à v27) : transformées en traits, à l'endroit exact où elles étaient dessinées
+  function migrateLinks() {
+    const g = G();
+    if (!g || g.v28) return 0;
+    const links = g.items.filter((l) => l.t === 'link');
+    if (!links.length) { g.v28 = true; return 0; }
+    const byId = {};
+    for (const it of g.items) byId[it.id] = it;
+    const { paths, bars } = linkGeometry();
+    const wires = [];
+    const same = (q, P) => Math.abs(q[0] - P[0]) < 0.6 && Math.abs(q[1] - P[1]) < 0.6;
+    for (const l of links) {
+      const p = paths[l.id];
+      if (!p) continue;
+      const a = byId[l.a], b = byId[l.b];
+      const pts = p.pts.map((q) => [rnd(q[0]), rnd(q[1])]);
+      const w = { id: uid(), t: 'wire', pts };
+      if (a && same(pts[0], portPos(a, 'bot'))) w.a = { id: a.id, port: a.t === 'trans' ? 'c' : 'bot' };
+      if (b && same(pts[pts.length - 1], portPos(b, 'top'))) w.b = { id: b.id, port: b.t === 'trans' ? 'c' : 'top' };
+      if (p.up) w.arrows = [{ seg: 2, f: 0.5 }];
+      else if (p.off && links.filter((x) => x.a === l.a).length < 2 && links.filter((x) => x.b === l.b).length < 2) {
+        let k0 = -1, len = 0;
+        for (let k = 0; k < pts.length - 1; k++) if (pts[k][0] === pts[k + 1][0] && Math.abs(pts[k + 1][1] - pts[k][1]) > len) { len = Math.abs(pts[k + 1][1] - pts[k][1]); k0 = k; }
+        if (k0 >= 0 && len >= 10) w.arrows = [{ seg: k0, f: 0.5 }];
+      }
+      wires.push(w);
+    }
+    for (const b of bars) {
+      const n = byId[b.id];
+      const stem = { id: uid(), t: 'wire', pts: [[b.stem[0], b.stem[1]], [b.stem[0], b.stem[2]]] };
+      if (n && b.kind === 'div') stem.a = { id: n.id, port: n.t === 'trans' ? 'c' : 'bot' };
+      if (n && b.kind === 'conv') stem.b = { id: n.id, port: n.t === 'trans' ? 'c' : 'top' };
+      if (stem.pts[0][1] !== stem.pts[1][1]) wires.push(stem);
+      if (b.x1 - b.x0 >= 1) wires.push({ id: uid(), t: 'wire', pts: [[b.double ? b.x0 - 10 : b.x0, b.y], [b.double ? b.x1 + 10 : b.x1, b.y]], ...(b.double ? { dbl: true } : {}) });
+    }
+    g.items = g.items.filter((l) => l.t !== 'link').concat(wires);
+    g.v28 = true;
+    return links.length;
   }
 
   /* ---------- Désignation : vérification (point de vue Commande) ---------- */
@@ -384,7 +553,7 @@
       const a = byId[id], y = portBot(a).y + barGap(a, 'div');
       const xs = [a.x, ...ls.filter((l) => !isUp(l)).map((l) => byId[l.b].x), ...ls.filter(isUp).map(() => a.x)];
       const dbl = a.t === 'trans';
-      bars.push({ x0: Math.min(...xs), x1: Math.max(...xs), y, double: dbl, stem: [a.x, portBot(a).y, dbl ? y - 3 : y] });
+      bars.push({ x0: Math.min(...xs), x1: Math.max(...xs), y, double: dbl, stem: [a.x, portBot(a).y, dbl ? y - 3 : y], id, kind: 'div' });
     }
     for (const id of Object.keys(ins)) {
       const ls = ins[id];
@@ -392,7 +561,7 @@
       const b = byId[id], y = portTop(b).y - barGap(b, 'conv');
       const xs = [b.x, ...ls.filter((l) => !isUp(l)).map((l) => byId[l.a].x)];
       const dbl = b.t === 'trans';
-      bars.push({ x0: Math.min(...xs), x1: Math.max(...xs), y, double: dbl, stem: [b.x, dbl ? y + 3 : y, portTop(b).y] });
+      bars.push({ x0: Math.min(...xs), x1: Math.max(...xs), y, double: dbl, stem: [b.x, dbl ? y + 3 : y, portTop(b).y], id, kind: 'conv' });
     }
     return { paths, bars };
   }
@@ -404,38 +573,21 @@
     const withRef = !o.export && S.ref && S.ref !== view;
     const list = items();
     let s = '';
-    const { paths, bars } = linkGeometry();
-    if (!o.export) S.paths = paths;
-    // liaisons
-    for (const id of Object.keys(paths)) {
-      const p = paths[id];
-      s += `<polyline points="${p.pts.map((q) => q.join(',')).join(' ')}" fill="none" stroke="${INK}" stroke-width="1.6" stroke-linejoin="miter"/>`;
-      if (p.up) {                                     // flèche au milieu du segment montant
-        const [x, y0] = p.pts[2], y1 = p.pts[3][1], ym = (y0 + y1) / 2;
-        s += `<path d="M${x - 5} ${ym + 4} L${x} ${ym - 4} L${x + 5} ${ym + 4} Z" fill="${INK}"/>`;
-      } else if (p.off) {                             // liaison décalée : flèche vers le bas sur le plus long segment vertical
-        let best = null;
-        for (let k = 0; k < p.pts.length - 1; k++) {
-          const [x0, y0] = p.pts[k], [x1, y1] = p.pts[k + 1];
-          if (x0 === x1 && (!best || Math.abs(y1 - y0) > best.len)) best = { x: x0, ym: (y0 + y1) / 2, len: Math.abs(y1 - y0), dir: y1 >= y0 ? 1 : -1 };
+    // traits (simples ou doubles) et flèches posées à la main
+    for (const w of list.filter((x) => x.t === 'wire')) {
+      if (w.dbl) {
+        for (let k = 0; k < w.pts.length - 1; k++) {
+          const a = w.pts[k], b = w.pts[k + 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+          const nx = -(b[1] - a[1]) / L * 3, ny = (b[0] - a[0]) / L * 3;
+          for (const sg of [1, -1]) s += `<line x1="${rnd(a[0] + nx * sg)}" y1="${rnd(a[1] + ny * sg)}" x2="${rnd(b[0] + nx * sg)}" y2="${rnd(b[1] + ny * sg)}" stroke="${INK}" stroke-width="1.4"/>`;
         }
-        if (best && best.len >= 10) {
-          const sg = best.dir;                          // la flèche suit le sens de parcours du segment
-          s += `<path d="M${best.x - 4.5} ${rnd(best.ym - 3.5 * sg)} L${best.x} ${rnd(best.ym + 3.5 * sg)} L${best.x + 4.5} ${rnd(best.ym - 3.5 * sg)} Z" fill="${INK}"/>`;
-        }
+      } else s += `<polyline points="${w.pts.map((q) => q.join(',')).join(' ')}" fill="none" stroke="${INK}" stroke-width="1.6" stroke-linejoin="miter"/>`;
+      for (const r of w.arrows || []) {
+        const q = arrowPos(w, r);
+        const ux = q.dx, uy = q.dy, px = -uy, py = ux;          // sens du trait et perpendiculaire
+        const tip = [q.x + ux * 4.5, q.y + uy * 4.5], b1 = [q.x - ux * 4 + px * 5, q.y - uy * 4 + py * 5], b2 = [q.x - ux * 4 - px * 5, q.y - uy * 4 - py * 5];
+        s += `<path d="M${rnd(tip[0])} ${rnd(tip[1])} L${rnd(b1[0])} ${rnd(b1[1])} L${rnd(b2[0])} ${rnd(b2[1])} Z" fill="${INK}"/>`;
       }
-    }
-    for (const b of bars) {
-      if (b.x1 - b.x0 < 1) {                          // une seule branche descendante : simple trait, pas de barre
-        s += `<line x1="${b.stem[0]}" y1="${b.stem[1]}" x2="${b.stem[0]}" y2="${b.stem[2]}" stroke="${INK}" stroke-width="1.6"/>` +
-          `<line x1="${b.stem[0]}" y1="${b.y - 3}" x2="${b.stem[0]}" y2="${b.y + 3}" stroke="${INK}" stroke-width="1.6"/>`;
-        continue;
-      }
-      s += `<line x1="${b.stem[0]}" y1="${b.stem[1]}" x2="${b.stem[0]}" y2="${b.stem[2]}" stroke="${INK}" stroke-width="1.6"/>`;
-      if (b.double) {
-        s += `<line x1="${b.x0 - 10}" y1="${b.y - 3}" x2="${b.x1 + 10}" y2="${b.y - 3}" stroke="${INK}" stroke-width="1.4"/>` +
-          `<line x1="${b.x0 - 10}" y1="${b.y + 3}" x2="${b.x1 + 10}" y2="${b.y + 3}" stroke="${INK}" stroke-width="1.4"/>`;
-      } else s += `<line x1="${b.x0}" y1="${b.y}" x2="${b.x1}" y2="${b.y}" stroke="${INK}" stroke-width="1.6"/>`;
     }
     // étapes et actions
     for (const st of list.filter((i) => i.t === 'step')) {
@@ -488,8 +640,9 @@
         const st = find(it.step);
         const b = st && actBoxes(st, S.view, S.ref && S.ref !== S.view).find((q) => q.a.id === it.id);
         if (b) o += `<rect x="${rnd(b.x - 3)}" y="${rnd(b.y - 3)}" width="${rnd(b.w + 6)}" height="${b.h + 6}" ${dash}/>`;
-      } else if (it.t === 'link' && S.paths[it.id]) {
-        o += `<polyline points="${S.paths[it.id].pts.map((q) => q.join(',')).join(' ')}" fill="none" stroke="${SEL}" stroke-opacity="0.45" stroke-width="7" stroke-linejoin="round"/>`;
+      } else if (it.t === 'wire') {
+        o += `<polyline points="${it.pts.map((q) => q.join(',')).join(' ')}" fill="none" stroke="${SEL}" stroke-opacity="0.45" stroke-width="${it.dbl ? 11 : 7}" stroke-linejoin="round"/>`;
+        for (const q of [it.pts[0], it.pts[it.pts.length - 1]]) o += `<circle cx="${q[0]}" cy="${q[1]}" r="${3.5 / k}" fill="${SEL}"/>`;
       }
     }
     // cadenas : un tiers de l'élément figé, sans dépasser sa largeur visible
@@ -499,10 +652,18 @@
     if (d && d.mode === 'marquee' && d.cur) {
       o += `<rect x="${Math.min(d.a.x, d.cur.x)}" y="${Math.min(d.a.y, d.cur.y)}" width="${Math.abs(d.cur.x - d.a.x)}" height="${Math.abs(d.cur.y - d.a.y)}" fill="${SEL}" fill-opacity="0.08" ${dash.replace('fill="none" ', '')}/>`;
     }
-    // liaison en cours de tracé
-    if (d && d.mode === 'link' && d.cur) {
-      const a = find(d.a);
-      if (a) o += `<line x1="${a.x}" y1="${a.y}" x2="${d.cur.x}" y2="${d.cur.y}" stroke="${SEL}" stroke-width="2" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
+    // trait en cours de tracé + point d'accroche sous le curseur
+    if (S.tool === 'wire' && S.cursor) {
+      const q = snapWire(S.cursor);
+      if (S.wdraft) {
+        const pts = S.wdraft.pts.slice();
+        const nx = q.att || q.onWire ? [q.x, q.y] : orthoNext(pts[pts.length - 1], q);
+        const last = pts[pts.length - 1];
+        if (nx[0] !== last[0] && nx[1] !== last[1]) pts.push([nx[0], last[1]]);
+        pts.push(nx);
+        o += `<polyline points="${pts.map((r) => r.join(',')).join(' ')}" fill="none" stroke="${SEL}" stroke-width="2" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
+      }
+      if (q.att || q.onWire) o += `<circle cx="${q.x}" cy="${q.y}" r="${6 / k}" fill="none" stroke="#ff8a00" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
     }
     // panneaux « ! » : texte manquant ou mal écrit pour le point de vue affiché
     {
@@ -527,6 +688,9 @@
       const b = st && actBoxes(st, S.view, S.ref && S.ref !== S.view).find((q) => q.a.id === it.id);
       if (!b) return '';
       x = b.x + b.w; y = b.y; size = Math.min(b.w / 3, b.h);
+    } else if (it.t === 'wire') {
+      const a = it.pts[0], b = it.pts[1];
+      x = (a[0] + b[0]) / 2; y = (a[1] + b[1]) / 2; size = Math.min(Math.hypot(b[0] - a[0], b[1] - a[1]) / 3, it.dbl ? 8 : 6);
     } else return '';
     const sc = size / 20;
     return `<g transform="translate(${rnd(x)} ${rnd(y)}) scale(${rnd(sc * 1000) / 1000})">` +
@@ -566,9 +730,8 @@
       const w = textW(txt(tr.id) || ph('trans'), 12);
       if (Math.abs(p.y - tr.y) <= 8 + tol && p.x >= tr.x - TR_W - tol && p.x <= tr.x + TR_W + 10 + w) return tr;
     }
-    for (const id of Object.keys(S.paths)) {
-      const pts = S.paths[id].pts;
-      for (let i = 0; i < pts.length - 1; i++) if (distSeg(p, pts[i], pts[i + 1]) <= 4 + tol) return find(id);
+    for (const w of list.filter((i) => i.t === 'wire').reverse()) {
+      for (let i = 0; i < w.pts.length - 1; i++) if (distSeg(p, w.pts[i], w.pts[i + 1]) <= (w.dbl ? 6 : 4) + tol) return w;
     }
     return null;
   }
@@ -611,7 +774,7 @@
         for (const b of actBoxes(it, S.view, withRef)) add(b.x + b.w, b.y + b.h);
       } else if (it.t === 'trans') {
         add(it.x - TR_W - 70, it.y - 10); add(it.x + TR_W + 10 + textW(txt(it.id) || ph('trans'), 12), it.y + 20);
-      }
+      } else if (it.t === 'wire') for (const q of it.pts) add(q[0], q[1]);
     }
     return x0 === Infinity ? null : { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   }
@@ -632,48 +795,10 @@
     for (const st of items()) if (st.t === 'step') m = Math.max(m, st.n);
     return m + 1;
   }
-  const linkExists = (a, b) => items().some((l) => l.t === 'link' && l.a === a && l.b === b);
   const outCount = (id) => items().filter((l) => l.t === 'link' && l.a === id).length;
   const inCount = (id) => items().filter((l) => l.t === 'link' && l.b === id).length;
-  // Trait bien vertical : l'élément du dessous se cale sous celui du dessus (sauf divergence / convergence, ou place prise)
-  function alignBelow(a, b) {
-    if (b.y > a.y && outCount(a.id) <= 1 && inCount(b.id) <= 1 && freeAt(a.x, b.y, b.id)) {
-      const dx = a.x - b.x;
-      b.x = a.x;
-      return dx;
-    }
-    return 0;
-  }
-  // Relie a -> b ; deux étapes (ou deux transitions) reçoivent automatiquement l'élément intermédiaire
-  function connect(a, b) {
-    if (!a || !b || a.id === b.id) return false;
-    const half = gap() / 2;
-    if (a.t === b.t) {
-      const down = b.y > a.y + 4;
-      // place libre : sous le départ s'il n'a pas encore de suite, sinon au-dessus de l'arrivée, sinon à côté
-      const cands = [];
-      if (!outCount(a.id)) cands.push({ x: a.x, y: a.y + half });
-      if (down && !inCount(b.id)) cands.push({ x: b.x, y: b.y - half });
-      cands.push(down ? { x: snapV((a.x + b.x) / 2), y: snapV((a.y + b.y) / 2) } : { x: a.x + 60, y: a.y + half });
-      const mid = freeSpot(cands);
-      const m = a.t === 'step' ? { id: uid(), t: 'trans', x: mid.x, y: mid.y } : { id: uid(), t: 'step', x: mid.x, y: mid.y, n: nextStepNumber() };
-      items().push(m);
-      items().push({ id: uid(), t: 'link', a: a.id, b: m.id });
-      items().push({ id: uid(), t: 'link', a: m.id, b: b.id, ...(down ? {} : { up: true }) });   // vers le haut : renvoi
-      return true;
-    }
-    if (linkExists(a.id, b.id)) return false;
-    const up = b.y <= a.y + 4;                       // liaison tracée vers le haut : renvoi
-    items().push({ id: uid(), t: 'link', a: a.id, b: b.id, ...(up ? { up: true } : {}) });
-    if (!up) alignBelow(a, b);
-    return true;
-  }
-  function validPair(a, b) {
-    return a && b && a.id !== b.id && ((a.t === 'step' && b.t === 'trans') || (a.t === 'trans' && b.t === 'step'));
-  }
   function addNode(kind, p) {
     const q = { x: snapV(p.x), y: snapV(p.y) };
-    const prev = S.sel ? find(S.sel) : null;
     let it;
     mutate(() => {
       if (kind === 'trans') it = { id: uid(), t: 'trans', x: q.x, y: q.y };
@@ -683,8 +808,6 @@
         it = { id: uid(), t: 'step', x: q.x, y: q.y, n: init && !hasInit ? 0 : nextStepNumber(), ...(init ? { init: true } : {}) };
       }
       items().push(it);
-      // enchaînement automatique : l'élément sélectionné juste au-dessus est relié au nouveau
-      if (prev && validPair(prev, it) && prev.y < it.y && !linkExists(prev.id, it.id)) connect(prev, it);
     });
     S.sel = it.id;
     renderOverlay(); updateUI();
@@ -735,6 +858,7 @@
       const gone = new Set(list.map((i) => i.id));
       for (const it of list) if (it.t === 'step') for (const a of actsOf(it.id)) gone.add(a.id);
       g.items = g.items.filter((i) => !gone.has(i.id) && !(i.t === 'link' && (gone.has(i.a) || gone.has(i.b))));
+      for (const w of g.items) if (w.t === 'wire') { if (w.a && gone.has(w.a.id)) delete w.a; if (w.b && gone.has(w.b.id)) delete w.b; }
       for (const v of VIEWS) for (const k of gone) delete g.tx[v][k];
     });
     S.sels = [];
@@ -746,6 +870,7 @@
     if (!list.length) return;
     const g = G();
     const nodes = list.filter((i) => i.t === 'step' || i.t === 'trans');
+    for (const w of list.filter((i) => i.t === 'wire')) for (const q of w.pts) { /* largeur prise en compte ci-dessous */ }
     // décalage vers la droite : largeur de la sélection (actions et textes compris) + une marge
     let x0 = Infinity, x1 = -Infinity;
     const withRef = S.ref && S.ref !== S.view;
@@ -754,7 +879,8 @@
       if (it.t === 'step') { x1 = Math.max(x1, it.x + STEP_H); for (const b of actBoxes(it, S.view, withRef)) x1 = Math.max(x1, b.x + b.w); }
       else x1 = Math.max(x1, it.x + TR_W + 10 + textW(txt(it.id) || ph('trans'), 12));
     }
-    const DX = nodes.length ? Math.ceil((x1 - x0 + 60) / GRID) * GRID : 0;
+    for (const w of list.filter((i) => i.t === 'wire')) for (const q of w.pts) { x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); }
+    const DX = x1 > x0 ? Math.ceil((x1 - x0 + 60) / GRID) * GRID : 60;
     const map = {}, copies = [];
     mutate(() => {
       let n = nextStepNumber();
@@ -771,16 +897,27 @@
         acts.push([{ ...a, ord: last[last.length - 1].ord + 1 }, a.step]);
       }
       for (const [a, stepId] of acts) { const c = { id: uid(), t: 'act', step: stepId, ord: a.ord }; map[a.id] = c.id; copies.push(c); }
-      for (const l of g.items) if (l.t === 'link' && map[l.a] && map[l.b]) copies.push({ id: uid(), t: 'link', a: map[l.a], b: map[l.b] });
+      // traits : ceux sélectionnés, et ceux qui relient deux éléments copiés
+      const selW = new Set(list.filter((i) => i.t === 'wire').map((i) => i.id));
+      for (const w of g.items) {
+        if (w.t !== 'wire') continue;
+        const both = w.a && w.b && map[w.a.id] && map[w.b.id];
+        if (!selW.has(w.id) && !both) continue;
+        const c = { ...clone(w), id: uid(), pts: w.pts.map((q) => [q[0] + DX, q[1]]) };
+        delete c.locked;
+        if (c.a) { if (map[c.a.id]) c.a.id = map[c.a.id]; else delete c.a; }
+        if (c.b) { if (map[c.b.id]) c.b.id = map[c.b.id]; else delete c.b; }
+        copies.push(c);
+      }
       g.items.push(...copies);
       for (const v of VIEWS) for (const k of Object.keys(map)) if (g.tx[v][k]) g.tx[v][map[k]] = g.tx[v][k];
     });
-    S.sels = copies.filter((c) => c.t !== 'link').map((c) => c.id);
+    S.sels = copies.map((c) => c.id);
     render(); updateUI();
   }
   // Figer / libérer la sélection ; un élément figé ne peut plus être déplacé, modifié ni supprimé
   function toggleLock() {
-    const list = selItems().filter((i) => i.t !== 'link');
+    const list = selItems();
     if (!list.length) return;
     const unlock = list.every((i) => i.locked);
     mutate(() => { for (const it of list) { if (unlock) delete it.locked; else it.locked = true; } });
@@ -835,12 +972,11 @@
           if (additive) { if (S.sels.includes(h.id)) click = 'toggle'; else S.sels = [...S.sels, h.id]; }
           else if (!S.sels.includes(h.id)) S.sels = [h.id];
           else if (S.sels.length > 1) click = 'collapse';
-          // Sélection simple : tout le bloc (éléments face à face) bouge ; sélection multiple / Maj : seulement les éléments choisis
-          const nodes = selItems().filter((i) => i.t === 'step' || i.t === 'trans');
-          const moving = additive ? nodes : blocksOf(nodes.map((n) => n.id));
-          if ((h.t === 'step' || h.t === 'trans') && S.sels.includes(h.id)) {
-            if (moving.some((n) => n.locked)) hint('Un élément figé fait partie de ce bloc : libérez-le pour le déplacer.');
-            else S.drag = { mode: 'move', p0: p, orig: moving.map((n) => [n.id, n.x, n.y]), single: additive, before: snap(), moved: false, cx: e.clientX, cy: e.clientY, hitId: h.id, click };
+          // les étapes, transitions et traits sélectionnés bougent ensemble ; les traits accrochés suivent
+          const moving = selItems().filter((i) => i.t === 'step' || i.t === 'trans' || i.t === 'wire');
+          if ((h.t === 'step' || h.t === 'trans' || h.t === 'wire') && S.sels.includes(h.id)) {
+            if (moving.some((n) => n.locked)) hint('Un élément figé est sélectionné : libérez-le pour le déplacer.');
+            else S.drag = { mode: 'move', p0: p, orig: moving.map((n) => (n.t === 'wire' ? [n.id, n.pts.map((q) => q.slice())] : [n.id, n.x, n.y])), before: snap(), moved: false, cx: e.clientX, cy: e.clientY, hitId: h.id, click };
           } else if (click === 'toggle') S.sels = S.sels.filter((x) => x !== h.id);
         } else if (additive) {
           S.drag = { mode: 'marquee', a: p, cur: p, add: true };
@@ -857,12 +993,16 @@
         else if (st) addAction(st); else hint('Action : touchez une étape pour lui ajouter une action.');
         break;
       }
-      case 'link': {
-        const n = nodeAt(p);
-        if (n) { S.drag = { mode: 'link', a: n.id, cur: p }; renderOverlay(); }
-        else pan();
+      case 'wire': {
+        const now = Date.now(), last = S.lastDown;
+        S.lastDown = { t: now, x: e.clientX, y: e.clientY, id: 'wire' };
+        if (S.wdraft && last && last.id === 'wire' && now - last.t < 350 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 8) { finishWire(); break; }
+        wireDown(p);
         break;
       }
+      case 'arrow':
+        arrowDown(p);
+        break;
     }
   }
   function onMove(e) {
@@ -877,19 +1017,28 @@
       return;
     }
     const d = S.drag;
-    if (!d) return;
+    if (!d) { if (S.tool === 'wire') { S.cursor = toWorld(e); renderOverlay(); } return; }
     if (d.mode === 'pan') { S.cam.x = d.vx + (e.clientX - d.cx); S.cam.y = d.vy + (e.clientY - d.cy); applyCam(); return; }
     const p = toWorld(e);
     if (d.mode === 'move') {
       if (!d.moved && Math.hypot(e.clientX - d.cx, e.clientY - d.cy) < 3) return;
       d.moved = true;
       const dx = snapV(p.x - d.p0.x), dy = snapV(p.y - d.p0.y);
-      for (const [id, x, y] of d.orig) { const it = find(id); if (it) { it.x = x + dx; it.y = y + dy; } }
-      if (d.single) relayout();
+      const movedIds = new Set(d.orig.map((o) => o[0]));
+      for (const o of d.orig) {
+        const it = find(o[0]);
+        if (!it) continue;
+        if (it.t === 'wire') {
+          it.pts = o[1].map((q) => [q[0] + dx, q[1] + dy]);
+          // extrémité accrochée à un élément qui ne bouge pas : elle se détache
+          for (const k of ['a', 'b']) if (it[k] && !movedIds.has(it[k].id)) delete it[k];
+        } else { it.x = o[1] + dx; it.y = o[2] + dy; }
+      }
+      syncWires(new Set(d.orig.filter((o) => find(o[0]) && find(o[0]).t === 'wire').map((o) => o[0])));
       sceneG.innerHTML = sceneSVG(); renderOverlay();
       return;
     }
-    if (d.mode === 'link' || d.mode === 'marquee') { d.cur = p; renderOverlay(); }
+    if (d.mode === 'marquee') { d.cur = p; renderOverlay(); }
   }
   function onUp(e) {
     S.pointers.delete(e.pointerId);
@@ -898,8 +1047,7 @@
     S.drag = null;
     if (!d) return;
     if (d.mode === 'move') {
-      if (d.moved) magnet(d.orig.map(([id]) => find(id)).filter(Boolean));
-      relayout();
+      syncWires();
       if (snap() !== d.before) { pushUndo(d.before); save(); }
       else if (d.click === 'collapse') S.sels = [d.hitId];          // simple clic dans une sélection : on ne garde que l'élément touché
       else if (d.click === 'toggle') S.sels = S.sels.filter((x) => x !== d.hitId);
@@ -909,24 +1057,11 @@
     if (d.mode === 'marquee') {
       const p = toWorld(e);
       const x0 = Math.min(d.a.x, p.x), x1 = Math.max(d.a.x, p.x), y0 = Math.min(d.a.y, p.y), y1 = Math.max(d.a.y, p.y);
-      const inside = items().filter((i) => (i.t === 'step' || i.t === 'trans') && i.x >= x0 && i.x <= x1 && i.y >= y0 && i.y <= y1).map((i) => i.id);
+      const inBox = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+      const inside = items().filter((i) => ((i.t === 'step' || i.t === 'trans') && inBox(i.x, i.y)) || (i.t === 'wire' && i.pts.every((q) => inBox(q[0], q[1])))).map((i) => i.id);
       S.sels = [...new Set([...S.sels, ...inside])];
       render(); updateUI();
       return;
-    }
-    if (d.mode === 'link') {
-      const a = find(d.a), b = nodeAt(toWorld(e));
-      if (a && b && b.id !== a.id) {
-        let made = false;
-        mutate(() => { made = connect(a, b); });
-        if (made && a.t === b.t) hint(a.t === 'step' ? 'Une transition a été ajoutée entre les deux étapes : double appui dessus pour écrire sa réceptivité.' : 'Une étape a été ajoutée entre les deux transitions.');
-        else if (!made) hint('Ces deux éléments sont déjà reliés.');
-        else if (b.t === 'trans' && inCount(b.id) > 1) hint('Convergence en ET (double trait) : plusieurs étapes vers une même transition. Pour un OU, donnez à chaque branche sa propre transition, puis reliez ces transitions à l’étape suivante.');
-        else if (a.t === 'trans' && outCount(a.id) > 1) hint('Divergence en ET (double trait) : la transition active plusieurs étapes en même temps.');
-        else if (b.t === 'step' && inCount(b.id) > 1) hint('Convergence en OU (trait simple) : plusieurs transitions mènent à la même étape.');
-        else if (a.t === 'step' && outCount(a.id) > 1) hint('Divergence en OU (trait simple) : l’étape peut évoluer par l’une ou l’autre transition.');
-      }
-      renderOverlay();
     }
   }
   function onCancel(e) {
@@ -941,6 +1076,7 @@
   svg.addEventListener('pointerup', onUp);
   svg.addEventListener('pointercancel', onCancel);
   svg.addEventListener('contextmenu', (e) => e.preventDefault());
+  svg.addEventListener('dblclick', () => { if (S.tool === 'wire' && S.wdraft) finishWire(); });
   svg.addEventListener('wheel', (e) => {
     e.preventDefault();
     const r = svg.getBoundingClientRect();
@@ -960,23 +1096,25 @@
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); doRedo(); return; }
-    if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); S.sels = items().filter((i) => i.t !== 'link').map((i) => i.id); render(); updateUI(); return; }
+    if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); S.sels = items().filter((i) => i.t !== 'link' && i.t !== 'act').map((i) => i.id); render(); updateUI(); return; }
     if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel(); return; }
     if (!mod && (e.key === 'l' || e.key === 'L')) { toggleLock(); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') { if (S.sels.length) { e.preventDefault(); deleteSel(); } return; }
     if (e.key === 'Enter' && S.sel) { e.preventDefault(); editText(S.sel); return; }
+    if (e.key === 'Escape' && S.wdraft) { finishWire(); return; }
     if (e.key === 'Escape') { if (S.drag) S.drag = null; else if (S.sels.length) S.sels = []; else setTool('select'); render(); updateUI(); }
   });
 
   /* ---------- Interface ---------- */
   const HINTS = {
     multi: 'Sélection multiple : touchez les éléments pour les ajouter ou les retirer ; glissez sur le fond pour tracer un rectangle de sélection. Déplacement de la vue : deux doigts, clic droit ou molette.',
-    select: 'Sélection : touchez un élément pour le choisir (Maj+clic : plusieurs), faites glisser une étape ou une transition pour déplacer son bloc (les éléments face à face, espacés de l’écart réglé). Pour sortir un élément de son bloc : Sélection multiple (ou Maj) puis glisser de côté. Double appui (ou Entrée) : modifier le texte, ou le numéro d’une étape. Glisser le fond déplace la vue ; molette ou pincement pour zoomer.',
-    init: 'Étape initiale : touchez le plan pour la poser. Si une transition est sélectionnée juste au-dessus, elles sont reliées automatiquement.',
-    step: 'Étape : touchez le plan pour la poser (numérotée automatiquement). Si une transition est sélectionnée au-dessus, elles sont reliées automatiquement : posez ainsi tout le cycle d’affilée.',
-    trans: 'Transition : touchez le plan pour la poser. Si une étape est sélectionnée au-dessus, elles sont reliées automatiquement.',
+    select: 'Sélection : touchez un élément pour le choisir (Maj+clic : plusieurs), faites glisser un élément pour le déplacer (les traits accrochés suivent). « Ordonner » range les étapes sélectionnées en colonne, à l’écart réglé. Double appui (ou Entrée) : modifier le texte, ou le numéro d’une étape. Glisser le fond déplace la vue ; molette ou pincement pour zoomer.',
+    init: 'Étape initiale : touchez le plan pour la poser.',
+    step: 'Étape : touchez le plan pour la poser (numérotée automatiquement). Reliez ensuite avec l’outil Trait.',
+    trans: 'Transition : touchez le plan pour la poser. Reliez-la ensuite avec l’outil Trait.',
     act: 'Action : touchez une étape pour lui ajouter une action (plusieurs possibles).',
-    link: 'Liaison : faites glisser d’une étape vers une transition, ou d’une transition vers une étape. Plusieurs transitions sous une étape = divergence en OU ; plusieurs étapes sous une transition = divergence en ET. Une liaison vers le haut est une reprise de séquence.',
+    wire: 'Trait : touchez le départ (il s’accroche au haut ou au bas d’une étape, au centre d’une transition, ou à un autre trait), puis chaque coude. Le trait se termine sur un élément ou un trait, par un double appui ou Échap. Les segments sont toujours horizontaux ou verticaux. « Trait double » pour les ET.',
+    arrow: 'Flèche : touchez un trait pour y poser une flèche dans le sens du tracé ; touchez la flèche pour l’inverser, encore une fois pour la retirer.',
   };
   let hintTimer = null;
   function hint(msg) {
@@ -985,7 +1123,7 @@
     clearTimeout(hintTimer);
     hintTimer = setTimeout(updateUI, 5000);
   }
-  function setTool(t) { S.tool = t; S.drag = null; renderOverlay(); updateUI(); }
+  function setTool(t) { if (S.wdraft) finishWire(); S.tool = t; S.drag = null; renderOverlay(); updateUI(); }
   function updateUI() {
     document.querySelectorAll('[data-gtool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.gtool === S.tool)));
     document.querySelectorAll('[data-gv-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.gvTab === S.view)));
@@ -1003,6 +1141,9 @@
     $('#gf-lockmarks').setAttribute('aria-pressed', String(!S.lockMarks));
     $('#gf-multi').setAttribute('aria-pressed', String(S.multi && S.tool === 'select'));
     $('#gf-gap-val').textContent = String(gap());
+    $('#gf-order').disabled = list.filter((i) => i.t === 'step').length < 1 || list.length < 2;
+    const sw = list.filter((i) => i.t === 'wire');
+    $('#gf-dbl').setAttribute('aria-pressed', String(sw.length ? sw.every((w) => w.dbl) : !!S.wireDbl));
     $('#gf-gap-m').disabled = gap() <= GAP_MIN;
     $('#gf-gap-p').disabled = gap() >= GAP_MAX;
     $('#gf-selcount').textContent = list.length > 1 ? list.length + ' éléments sélectionnés' : '';
@@ -1086,6 +1227,12 @@
   $('#gf-lock').addEventListener('click', toggleLock);
   $('#gf-lockmarks').addEventListener('click', toggleLockMarks);
   $('#gf-gap-m').addEventListener('click', () => changeGap(-1));
+  $('#gf-order').addEventListener('click', orderSel);
+  $('#gf-dbl').addEventListener('click', () => {
+    const ws = selItems().filter((i) => i.t === 'wire' && !i.locked);
+    if (ws.length) { const on = !ws.every((w) => w.dbl); S.wireDbl = on; mutate(() => { for (const w of ws) { if (on) w.dbl = true; else delete w.dbl; } }); return; }
+    S.wireDbl = !S.wireDbl; updateUI();
+  });
   $('#gf-gap-p').addEventListener('click', () => changeGap(1));
 
   // Changement de projet : nouveau Grafcet, historique vidé, vue ajustée
@@ -1095,6 +1242,8 @@
     if (id !== S.schemaId) {
       S.schemaId = id; S.sels = []; S.drag = null; S.undo = []; S.redo = [];
       const fixed = repairOverlaps();
+      const conv = migrateLinks();
+      if (conv) { save(); setTimeout(() => hint(`${conv} liaison${conv > 1 ? 's' : ''} transformée${conv > 1 ? 's' : ''} en traits : vous pouvez maintenant les modifier librement.`), 60); }
       if (fixed) { save(); setTimeout(() => hint(`${fixed} élément${fixed > 1 ? 's' : ''} superposé${fixed > 1 ? 's' : ''} (anciennes versions) écarté${fixed > 1 ? 's' : ''} sur le côté : supprimez ceux en trop.`), 50); }
       if (root.dataset.schMode === 'grafcet') requestAnimationFrame(() => { render(); fit(); updateUI(); });
       else { S.needFit = true; render(); updateUI(); }
