@@ -27,6 +27,8 @@
   const INK = '#222';
   const SEL = '#2f7df6';
   const WARN = '#e8a10c';
+  const BAD = '#d62828';
+  const ON = '#1f9d55';
   const FONT = 'Arial, Helvetica, sans-serif';
 
   const $ = (s) => document.querySelector(s);
@@ -53,6 +55,8 @@
     lastDown: null,
     paths: {},              // tracés des liaisons (pour le clic)
     schemaId: null,
+    check: true,            // vérification de la structure (ronds rouges)
+    sim: null,              // simulation : { active: Set d'étapes, topo, n }
   };
   // S.sel = l'élément sélectionné quand il est seul (sinon null)
   Object.defineProperty(S, 'sel', {
@@ -61,6 +65,7 @@
   });
   try {
     if (window.localStorage.getItem('ef_gf_locks') === '0') S.lockMarks = false;
+    if (window.localStorage.getItem('ef_gf_check') === '0') S.check = false;
     const v = window.localStorage.getItem('ef_gv');
     if (VIEWS.includes(v)) S.view = v;
     const r = JSON.parse(window.localStorage.getItem('ef_gf_ref') || 'null');
@@ -129,6 +134,7 @@
     S.redo.length = 0;
   }
   function mutate(fn) {
+    if (S.sim) stopSim(true);
     const before = snap();
     fn();
     syncWires();
@@ -137,6 +143,7 @@
     save(); render(); updateUI();
   }
   function restore(json) {
+    if (S.sim) stopSim(true);
     const api = API(), s = api && api.schema();
     if (!s) return;
     s.grafcet = JSON.parse(json);
@@ -460,6 +467,7 @@
     let m, found = 0;
     const bad = [];
     while ((m = re.exec(t))) {
+      if (m[1] === 'X' && !m[2]) continue;            // X6 : variable d'étape (temporisation 10s/X6)
       found++;
       if (!L.first.has(m[1]) || (m[2] && !L.second.has(m[2]))) bad.push(m[0]);
     }
@@ -468,10 +476,40 @@
     return null;
   }
 
+  /* ---------- Réceptivités : NON écrit « /a » (ou « !a »), affiché avec une barre au-dessus ----------
+     Le « / » ne vaut NON qu'en début de texte ou après un espace, « . », « + », « ( », « ↑ », « ↓ » :
+     « 10s/X6 » (temporisation) reste écrit tel quel. */
+  function notParts(t) {
+    const s = String(t || ''), out = [];
+    let buf = '', i = 0;
+    const opBefore = (k) => k === 0 || /[\s.+(·*↑↓]/.test(s[k - 1]);
+    while (i < s.length) {
+      const c = s[i];
+      if ((c === '/' || c === '!') && opBefore(i) && i + 1 < s.length) {
+        const j = i + 1;
+        let end = j;
+        if (s[j] === '(') {
+          let d = 0;
+          for (end = j; end < s.length; end++) { if (s[end] === '(') d++; else if (s[end] === ')') { d--; if (!d) { end++; break; } } }
+        } else {
+          const m = s.slice(j).match(/^[↑↓]?%?[A-Za-z0-9_]+(\.\d+)?/);
+          end = m ? j + m[0].length : j;
+        }
+        if (end > j) { if (buf) { out.push({ t: buf }); buf = ''; } out.push({ t: s.slice(j, end), over: true }); i = end; continue; }
+      }
+      buf += c; i++;
+    }
+    if (buf) out.push({ t: buf });
+    return out;
+  }
+  const plain = (t) => notParts(t).map((q) => q.t).join('');
+  const richSVG = (t) => notParts(t).map((q) => (q.over ? `<tspan style="text-decoration:overline">${esc(q.t)}</tspan>` : esc(q.t))).join('');
+  const normText = (t) => String(t || '').replace(/\^/g, '↑').trim().slice(0, 120);
+
   /* ---------- Géométrie ---------- */
   const snapV = (v) => (S.snap ? Math.round(v / GRID) * GRID : rnd(v));
   const actsOf = (stepId) => items().filter((i) => i.t === 'act' && i.step === stepId).sort((a, b) => a.ord - b.ord);
-  const textW = (t, size) => String(t).length * size * 0.58;
+  const textW = (t, size) => plain(t).length * size * 0.58;
   const PLACEHOLDER = {
     systeme: ['action', 'évènement'], operative: ['action', 'évènement'],
     commande: ['désignation', 'désignation'], automate: ['sortie %Q2.x', 'entrée %I1.x'],
@@ -566,6 +604,362 @@
     return { paths, bars };
   }
 
+  /* ---------- Structure : lecture des traits ----------
+     Les traits sont découpés aux raccordements qu'ils traversent (centre d'une transition, haut / bas d'une étape),
+     puis regroupés en « nœuds de liaison » : morceaux qui se touchent par une extrémité libre, ou qui partent du
+     même côté d'un élément. Chaque nœud relie des sources (bas d'étape, dessous de transition) à des cibles
+     (haut d'étape, dessus de transition). C'est ce qui permet de vérifier les règles et de simuler. */
+  const near = (a, b) => Math.abs(a[0] - b[0]) < 0.6 && Math.abs(a[1] - b[1]) < 0.6;
+  function inSeg(P, a, b) {                      // P strictement à l'intérieur du segment [a, b]
+    if (Math.abs(a[0] - b[0]) < 0.6 && Math.abs(P[0] - a[0]) < 0.6) return P[1] > Math.min(a[1], b[1]) + 0.5 && P[1] < Math.max(a[1], b[1]) - 0.5;
+    if (Math.abs(a[1] - b[1]) < 0.6 && Math.abs(P[1] - a[1]) < 0.6) return P[0] > Math.min(a[0], b[0]) + 0.5 && P[0] < Math.max(a[0], b[0]) - 0.5;
+    return false;
+  }
+  const onPath = (P, pts) => pts.some((q) => near(P, q)) || pts.some((q, k) => k < pts.length - 1 && inSeg(P, q, pts[k + 1]));
+  function topo() {
+    const list = items(), byId = {};
+    for (const it of list) byId[it.id] = it;
+    const nodes = list.filter((i) => i.t === 'step' || i.t === 'trans');
+    const ports = [];
+    for (const n of nodes) {
+      if (n.t === 'step') { ports.push({ id: n.id, port: 'top', P: portPos(n, 'top') }); ports.push({ id: n.id, port: 'bot', P: portPos(n, 'bot') }); }
+      else ports.push({ id: n.id, port: 'c', P: portPos(n, 'c') });
+    }
+    const portAt = (P) => ports.find((q) => near(q.P, P)) || null;
+    // 1. découpe des traits aux raccordements traversés
+    const pieces = [];
+    for (const w of list.filter((i) => i.t === 'wire')) {
+      const endAtt = (k) => {
+        const e = w[k];
+        if (e && byId[e.id]) return { id: e.id, port: e.port };
+        const q = portAt(k === 'a' ? w.pts[0] : w.pts[w.pts.length - 1]);
+        return q ? { id: q.id, port: q.port } : null;
+      };
+      let cur = [w.pts[0]], curA = endAtt('a');
+      for (let k = 0; k < w.pts.length - 1; k++) {
+        const a = w.pts[k], b = w.pts[k + 1];
+        const cut = ports.filter((q) => inSeg(q.P, a, b)).sort((q, r) => Math.hypot(q.P[0] - a[0], q.P[1] - a[1]) - Math.hypot(r.P[0] - a[0], r.P[1] - a[1]));
+        for (const q of cut) {
+          cur.push(q.P);
+          pieces.push({ w, pts: cur, a: curA, b: { id: q.id, port: q.port } });
+          cur = [q.P]; curA = { id: q.id, port: q.port };
+        }
+        cur.push(b);
+      }
+      pieces.push({ w, pts: cur, a: curA, b: endAtt('b') });
+    }
+    // morceau à l'intérieur d'une étape (du haut au bas de la même étape) : ignoré
+    const ps = pieces.filter((pc) => !(pc.a && pc.b && pc.a.id === pc.b.id && byId[pc.a.id].t === 'step'));
+    // côté de l'élément : « out » = la liaison part de l'élément vers le bas, « in » = elle y arrive par le haut
+    const side = (pc, end) => {
+      const e = pc[end];
+      const n = byId[e.id];
+      if (n.t === 'step') return e.port === 'bot' ? 'out' : 'in';
+      const pts = pc.pts, nb = end === 'a' ? pts[1] : pts[pts.length - 2], far = end === 'a' ? pts[pts.length - 1] : pts[0];
+      const dy = (nb[1] - n.y) || (far[1] - n.y);
+      return dy < 0 ? 'in' : 'out';
+    };
+    // 2. regroupement
+    const par = ps.map((_, i) => i);
+    const root = (i) => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
+    const join = (i, j) => { par[root(i)] = root(j); };
+    const bySide = {};
+    const dangling = [];
+    ps.forEach((pc, i) => {
+      for (const end of ['a', 'b']) {
+        const P = end === 'a' ? pc.pts[0] : pc.pts[pc.pts.length - 1];
+        if (pc[end]) {
+          const key = pc[end].id + ':' + side(pc, end);
+          if (bySide[key] !== undefined) join(i, bySide[key]); else bySide[key] = i;
+          continue;
+        }
+        let touched = false;
+        ps.forEach((o, j) => {
+          if (j === i) return;
+          // sur un trait double, on accepte les deux traits extérieurs (± 3)
+          const ok = o.w.dbl ? o.pts.some((q, k) => k < o.pts.length - 1 && distSeg({ x: P[0], y: P[1] }, q, o.pts[k + 1]) <= 3.6) : onPath(P, o.pts);
+          if (ok) { join(i, j); touched = true; }
+        });
+        if (!touched && !pc.w.dbl) dangling.push({ i, P });          // une barre double dépasse normalement des branches
+      }
+    });
+    const nets = {};
+    ps.forEach((pc, i) => {
+      const r = root(i);
+      const n = nets[r] || (nets[r] = { pieces: [], src: new Map(), dst: new Map(), dbl: false, arrow: false, dangling: [] });
+      n.pieces.push(pc);
+      if (pc.w.dbl) n.dbl = true;
+      if (pc.w.arrows && pc.w.arrows.length) n.arrow = true;
+      for (const end of ['a', 'b']) {
+        if (!pc[end]) continue;
+        const sd = side(pc, end), P = end === 'a' ? pc.pts[0] : pc.pts[pc.pts.length - 1];
+        (sd === 'out' ? n.src : n.dst).set(pc[end].id, P);
+      }
+    });
+    for (const d of dangling) nets[root(d.i)].dangling.push(d.P);
+    // 3. liens élément → élément
+    const next = {}, prev = {};
+    for (const n of nodes) { next[n.id] = new Set(); prev[n.id] = new Set(); }
+    const netList = Object.values(nets);
+    for (const n of netList) for (const a of n.src.keys()) for (const b of n.dst.keys()) if (a !== b) { next[a].add(b); prev[b].add(a); }
+    return { nets: netList, next, prev, byId, nodes };
+  }
+  // Point d'ancrage d'un nœud de liaison : milieu de son plus long segment (horizontal de préférence pour une barre)
+  function netAnchor(n, horiz) {
+    let best = null;
+    for (const pc of n.pieces) for (let k = 0; k < pc.pts.length - 1; k++) {
+      const a = pc.pts[k], b = pc.pts[k + 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const score = L + (horiz && a[1] === b[1] ? 10000 : 0);
+      if (!best || score > best.s) best = { s: score, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2 };
+    }
+    return best || { x: 0, y: 0 };
+  }
+  // Trait simple qui se raccorde sur un trait double : il s'arrête sur le trait extérieur (comme sur une feuille)
+  function trimToDouble(w, list) {
+    const pts = w.pts.map((q) => q.slice());
+    const dbls = list.filter((x) => x.t === 'wire' && x.dbl && x !== w);
+    if (!dbls.length) return pts;
+    for (const [i, j] of [[0, 1], [pts.length - 1, pts.length - 2]]) {
+      const P = pts[i], Q = pts[j];
+      if (P[0] !== Q[0]) continue;                   // seulement pour un départ vertical
+      for (const d of dbls) {
+        if (d.pts.some((q, k) => k < d.pts.length - 1 && q[1] === d.pts[k + 1][1] && Math.abs(P[1] - q[1]) < 0.6 && P[0] >= Math.min(q[0], d.pts[k + 1][0]) - 0.5 && P[0] <= Math.max(q[0], d.pts[k + 1][0]) + 0.5)) {
+          P[1] += Q[1] > P[1] ? 3 : -3;
+          break;
+        }
+      }
+    }
+    return pts;
+  }
+
+  /* ---------- Vérification de la structure (règles du cours) ---------- */
+  function structIssues() {
+    const T = topo();
+    const { byId, next, prev, nodes } = T;
+    const out = [];
+    const add = (x, y, why, key) => {
+      const k = key || `${Math.round(x)}:${Math.round(y)}`;
+      const q = out.find((o) => o.k === k);
+      if (q) { if (!q.why.includes(why)) q.why += ' · ' + why; } else out.push({ k, x, y, why });
+    };
+    const atStep = (st, why) => add(st.x - STEP_H - 3, st.y - STEP_H - 3, why, st.id);
+    const atTrans = (tr, why) => add(tr.x - TR_W - 12, tr.y, why, tr.id);
+    const steps = nodes.filter((n) => n.t === 'step'), trans = nodes.filter((n) => n.t === 'trans');
+    const label = (n) => (n.t === 'step' ? `étape ${n.n}` : 'transition');
+    // règle 1 : une étape initiale
+    if (steps.length && !steps.some((s) => s.init)) {
+      const top = steps.slice().sort((a, b) => a.y - b.y || a.x - b.x)[0];
+      atStep(top, 'Aucune étape initiale : le Grafcet ne peut pas démarrer (règle 1). Utilisez l’outil « Étape initiale ».');
+    }
+    // numéros en double
+    const seen = {};
+    for (const st of steps) (seen[st.n] = seen[st.n] || []).push(st);
+    for (const k of Object.keys(seen)) if (seen[k].length > 1) for (const st of seen[k]) atStep(st, `Numéro ${k} utilisé par plusieurs étapes`);
+    // nœuds de liaison
+    for (const n of T.nets) {
+      const src = [...n.src.keys()].map((id) => byId[id]), dst = [...n.dst.keys()].map((id) => byId[id]);
+      const sS = src.filter((x) => x.t === 'step'), sT = src.filter((x) => x.t === 'trans');
+      const dS = dst.filter((x) => x.t === 'step'), dT = dst.filter((x) => x.t === 'trans');
+      const A = netAnchor(n, false), B = netAnchor(n, true);
+      for (const P of n.dangling) add(P[0], P[1], 'Trait non raccordé à ce bout : terminez-le sur une étape, une transition ou un autre trait');
+      if (!n.dangling.length && (!src.length || !dst.length) && (src.length || dst.length)) {
+        add(A.x, A.y, !src.length ? 'Ce trait n’arrive d’aucune étape ni transition' : 'Ce trait ne mène à aucune étape ni transition');
+      }
+      if (sS.length && dS.length) add(A.x, A.y, `Étape reliée à une étape (${sS.map(label).join(', ')} → ${dS.map(label).join(', ')}) : il manque une transition entre les deux`);
+      if (sT.length && dT.length) add(A.x, A.y, 'Transition reliée à une transition : il manque une étape entre les deux');
+      // ET : trait double ; OU : trait simple
+      if (sT.length === 1 && dS.length >= 2 && !sS.length && !n.dbl) add(B.x, B.y, 'Divergence en ET (une transition vers plusieurs étapes) : tracez la barre en trait double');
+      if (sS.length >= 2 && dT.length === 1 && !sT.length && !n.dbl) add(B.x, B.y, 'Convergence en ET (plusieurs étapes vers une transition) : tracez la barre en trait double');
+      if (n.dbl && sS.length === 1 && dT.length >= 2 && !sT.length) add(B.x, B.y, 'Divergence en OU (une étape vers plusieurs transitions) : trait simple — le trait double est réservé au ET');
+      if (n.dbl && sT.length >= 2 && dS.length === 1 && !sS.length) add(B.x, B.y, 'Convergence en OU (plusieurs transitions vers une étape) : trait simple — le trait double est réservé au ET');
+      if (n.dbl && src.length === 1 && dst.length === 1) add(B.x, B.y, 'Trait double inutile : une liaison simple suffit (le double trait sert aux ET)');
+      // aiguillage : réceptivités exclusives
+      if (sS.length === 1 && dT.length >= 2) {
+        const byTxt = {};
+        for (const t of dT) { const v = plain(txt(t.id)).replace(/\s+/g, ''); if (v) (byTxt[v] = byTxt[v] || []).push(t); }
+        for (const v of Object.keys(byTxt)) if (byTxt[v].length > 1) for (const t of byTxt[v]) atTrans(t, 'Aiguillage : réceptivités identiques, elles doivent être exclusives (une seule vraie à la fois)');
+      }
+      // liaison qui remonte : flèche obligatoire
+      if (!n.arrow) {
+        let up = false;
+        for (const a of n.src.values()) for (const b of n.dst.values()) if (b[1] < a[1] - 1) up = true;
+        if (up) add(A.x, A.y, 'Liaison qui remonte : ajoutez une flèche vers le haut (outil « Flèche »)');
+      }
+    }
+    // étapes et transitions isolées
+    for (const st of steps) {
+      if (![...next[st.id]].some((id) => byId[id].t === 'trans')) atStep(st, 'Aucune transition sous cette étape : le Grafcet s’arrête ici');
+      if (!st.init && ![...prev[st.id]].some((id) => byId[id].t === 'trans')) atStep(st, 'Étape jamais activée : aucune transition au-dessus');
+    }
+    for (const tr of trans) {
+      if (![...prev[tr.id]].some((id) => byId[id].t === 'step')) atTrans(tr, 'Aucune étape au-dessus de cette transition : elle ne peut jamais être validée (règle 2)');
+      if (![...next[tr.id]].some((id) => byId[id].t === 'step')) atTrans(tr, 'Aucune étape sous cette transition : rien ne sera activé (règle 3)');
+    }
+    return out;
+  }
+
+  /* ---------- Simulation (règles d'évolution) ---------- */
+  function startSim() {
+    if (S.wdraft) finishWire();
+    const T = topo();
+    const init = T.nodes.filter((n) => n.t === 'step' && n.init).map((n) => n.id);
+    S.sim = { topo: T, active: new Set(init), n: 0 };
+    S.sels = []; S.drag = null; S.tool = 'select';
+    render(); updateUI();
+    if (!init.length) hint('Aucune étape initiale : touchez une étape pour l’activer à la main, puis franchissez les transitions.');
+  }
+  function stopSim(silent) {
+    if (!S.sim) return;
+    S.sim = null;
+    if (!silent) { render(); updateUI(); }
+  }
+  const stepsAbove = (T, tr) => [...T.prev[tr.id]].map((id) => T.byId[id]).filter((n) => n && n.t === 'step');
+  const stepsBelow = (T, tr) => [...T.next[tr.id]].map((id) => T.byId[id]).filter((n) => n && n.t === 'step');
+  const validated = (tr) => { const up = stepsAbove(S.sim.topo, tr); return up.length > 0 && up.every((s) => S.sim.active.has(s.id)); };
+  function simDown(p) {
+    const T = S.sim.topo;
+    // transition touchée (trait ou réceptivité)
+    const tr = T.nodes.find((n) => n.t === 'trans' && Math.abs(p.y - n.y) <= 10 / S.cam.k + 4 &&
+      p.x >= n.x - TR_W - 8 && p.x <= n.x + TR_W + 12 + textW(txt(n.id) || '', 12));
+    if (tr) { simFire(tr); return true; }
+    const st = T.nodes.find((n) => n.t === 'step' && Math.abs(p.x - n.x) <= STEP_H + 3 && Math.abs(p.y - n.y) <= STEP_H + 3);
+    if (st) {
+      if (S.sim.active.has(st.id)) S.sim.active.delete(st.id); else S.sim.active.add(st.id);
+      renderOverlay(); updateUI();
+      hint(`Étape ${st.n} ${S.sim.active.has(st.id) ? 'activée' : 'désactivée'} à la main.`);
+      return true;
+    }
+    return false;
+  }
+  function simFire(tr) {
+    const T = S.sim.topo;
+    const up = stepsAbove(T, tr), down = stepsBelow(T, tr);
+    const r = txt(tr.id) ? ` « ${plain(txt(tr.id))} »` : '';
+    if (!up.length) { hint('Cette transition n’a aucune étape au-dessus : elle ne peut jamais être validée.'); return; }
+    const off = up.filter((s) => !S.sim.active.has(s.id));
+    if (off.length) {
+      hint(`Transition${r} non validée : ${off.length > 1 ? 'les étapes' : 'l’étape'} ${off.map((s) => s.n).join(', ')} ${off.length > 1 ? 'ne sont pas actives' : 'n’est pas active'} (règle 2).`);
+      return;
+    }
+    // règle 3 : désactivation des étapes précédentes puis activation des suivantes (règle 5 : une étape à la fois désactivée et activée reste active)
+    for (const s of up) S.sim.active.delete(s.id);
+    for (const s of down) S.sim.active.add(s.id);
+    S.sim.n++;
+    renderOverlay(); updateUI();
+    hint(`Transition${r} franchie : ${up.map((s) => s.n).join(', ')} désactivée${up.length > 1 ? 's' : ''}` +
+      (down.length ? `, ${down.map((s) => s.n).join(', ')} activée${down.length > 1 ? 's' : ''}` : ', aucune étape en dessous') + ' (règle 3).');
+  }
+  function simOverlay() {
+    const T = S.sim.topo;
+    const withRef = S.ref && S.ref !== S.view;
+    let o = '';
+    for (const st of T.nodes.filter((n) => n.t === 'step')) {
+      if (!S.sim.active.has(st.id)) continue;
+      for (const b of actBoxes(st, S.view, withRef)) o += `<rect x="${rnd(b.x + 1)}" y="${rnd(b.y + 1)}" width="${rnd(b.w - 2)}" height="${b.h - 2}" fill="${ON}" fill-opacity="0.18"/>`;
+      o += `<circle cx="${st.x - STEP_H + 8}" cy="${st.y + STEP_H - 8}" r="4.5" fill="${BAD}"/>`;
+    }
+    for (const tr of T.nodes.filter((n) => n.t === 'trans')) {
+      if (validated(tr)) o += `<line x1="${tr.x - TR_W - 4}" y1="${tr.y}" x2="${tr.x + TR_W + 4}" y2="${tr.y}" stroke="${ON}" stroke-opacity="0.55" stroke-width="9" stroke-linecap="round"/>`;
+    }
+    return o;
+  }
+
+  /* ---------- Modèles : structures de base du cours ---------- */
+  const TEMPLATES = {
+    lineaire: (b) => {
+      const s0 = b.step(0, 0, true), t0 = b.tr(0, 50), s1 = b.step(0, 100), t1 = b.tr(0, 150), s2 = b.step(0, 200), t2 = b.tr(0, 250);
+      b.link(s0, t0); b.link(t0, s1); b.link(s1, t1); b.link(t1, s2); b.link(s2, t2);
+      b.back(t2, s0, -60);
+    },
+    aiguillage: (b) => {
+      const s0 = b.step(0, 0, true), sa = b.step(-100, 100), sb = b.step(100, 100), s3 = b.step(0, 200);
+      const ta = b.tr(-100, 50), tb = b.tr(100, 50), tc = b.tr(-100, 150), td = b.tr(100, 150), te = b.tr(0, 250);
+      b.wire([[0, 20], [0, 30]], s0, 'bot'); b.wire([[-100, 30], [100, 30]]);
+      b.wire([[-100, 30], [-100, 50]], null, null, ta, 'c'); b.wire([[100, 30], [100, 50]], null, null, tb, 'c');
+      b.link(ta, sa); b.link(tb, sb); b.link(sa, tc); b.link(sb, td);
+      b.wire([[-100, 150], [-100, 170]], tc, 'c'); b.wire([[100, 150], [100, 170]], td, 'c'); b.wire([[-100, 170], [100, 170]]);
+      b.wire([[0, 170], [0, 180]], null, null, s3, 'top');
+      b.link(s3, te); b.back(te, s0, -140);
+    },
+    simultanees: (b) => {
+      const s0 = b.step(0, 0, true), sa = b.step(-100, 100), sb = b.step(100, 100), s3 = b.step(0, 200);
+      const t0 = b.tr(0, 50), t1 = b.tr(0, 150), t2 = b.tr(0, 250);
+      b.link(s0, t0);
+      b.wire([[0, 50], [0, 70]], t0, 'c'); b.wire([[-100, 70], [100, 70]], null, null, null, null, true);
+      b.wire([[-100, 70], [-100, 80]], null, null, sa, 'top'); b.wire([[100, 70], [100, 80]], null, null, sb, 'top');
+      b.wire([[-100, 120], [-100, 130]], sa, 'bot'); b.wire([[100, 120], [100, 130]], sb, 'bot'); b.wire([[-100, 130], [100, 130]], null, null, null, null, true);
+      b.wire([[0, 130], [0, 150]], null, null, t1, 'c');
+      b.link(t1, s3); b.link(s3, t2); b.back(t2, s0, -140);
+    },
+    saut: (b) => {
+      const s0 = b.step(0, 0, true), s1 = b.step(0, 100), s2 = b.step(0, 200);
+      const tj = b.tr(-120, 50), tn = b.tr(0, 50), t1 = b.tr(0, 150), t2 = b.tr(0, 250);
+      b.wire([[0, 20], [0, 30]], s0, 'bot'); b.wire([[-120, 30], [0, 30]]);
+      b.wire([[-120, 30], [-120, 50]], null, null, tj, 'c'); b.wire([[0, 30], [0, 50]], null, null, tn, 'c');
+      b.link(tn, s1); b.link(s1, t1);
+      b.wire([[0, 150], [0, 170]], t1, 'c'); b.wire([[-120, 50], [-120, 170]], tj, 'c'); b.wire([[-120, 170], [0, 170]]);
+      b.wire([[0, 170], [0, 180]], null, null, s2, 'top');
+      b.link(s2, t2); b.back(t2, s0, -160);
+    },
+    reprise: (b) => {
+      const s0 = b.step(0, 0, true), s1 = b.step(0, 100), s2 = b.step(0, 200), s3 = b.step(0, 300);
+      const t0 = b.tr(0, 50), t1 = b.tr(0, 150), tr = b.tr(-120, 250), tn = b.tr(0, 250), t3 = b.tr(0, 350);
+      b.link(s0, t0); b.link(t0, s1); b.link(s1, t1); b.link(t1, s2);
+      b.wire([[0, 220], [0, 230]], s2, 'bot'); b.wire([[-120, 230], [0, 230]]);
+      b.wire([[-120, 230], [-120, 250]], null, null, tr, 'c'); b.wire([[0, 230], [0, 250]], null, null, tn, 'c');
+      b.wire([[-120, 250], [-120, 265], [-160, 265], [-160, 75], [0, 75]], tr, 'c', null, null, false, [{ seg: 2, f: 0.5 }]);
+      b.link(tn, s3); b.link(s3, t3); b.back(t3, s0, -200);
+    },
+  };
+  const TEMPLATE_NAMES = { lineaire: 'Séquence linéaire', aiguillage: 'Aiguillage (OU)', simultanees: 'Séquences simultanées (ET)', saut: 'Saut d’étapes', reprise: 'Reprise de séquence' };
+  function insertTemplate(key) {
+    const make = TEMPLATES[key];
+    if (!make) return;
+    const g = G();
+    if (!g) return;
+    if (S.sim) stopSim(true);
+    const bb = bbox();
+    const ox = 0, oy = 0;
+    const made = [];
+    const hasInit = g.items.some((i) => i.t === 'step' && i.init);
+    let n = nextStepNumber();
+    const P = (x, y) => [ox + x, oy + y];
+    const b = {
+      step(x, y, first) { const it = { id: uid(), t: 'step', x: ox + x, y: oy + y, n: n++, ...(first && !hasInit ? { init: true } : {}) }; made.push(it); return it; },
+      tr(x, y) { const it = { id: uid(), t: 'trans', x: ox + x, y: oy + y }; made.push(it); return it; },
+      wire(pts, a, ap, z, zp, dbl, arrows) {
+        made.push({ id: uid(), t: 'wire', pts: pts.map((q) => P(q[0], q[1])), ...(dbl ? { dbl: true } : {}), ...(a ? { a: { id: a.id, port: ap } } : {}), ...(z ? { b: { id: z.id, port: zp } } : {}), ...(arrows ? { arrows } : {}) });
+      },
+      link(a, z) {
+        const ap = a.t === 'step' ? 'bot' : 'c', zp = z.t === 'step' ? 'top' : 'c';
+        const A = portPos(a, ap), Z = portPos(z, zp);
+        made.push({ id: uid(), t: 'wire', pts: [A, Z], a: { id: a.id, port: ap }, b: { id: z.id, port: zp } });
+      },
+      back(t, s, xl) {                                 // renvoi à gauche, flèche vers le haut
+        const A = portPos(t, 'c'), Z = portPos(s, 'top'), X = ox + xl;
+        made.push({ id: uid(), t: 'wire', pts: [A, [A[0], A[1] + 20], [X, A[1] + 20], [X, Z[1] - 20], [Z[0], Z[1] - 20], Z], a: { id: t.id, port: 'c' }, b: { id: s.id, port: 'top' }, arrows: [{ seg: 2, f: 0.5 }] });
+      },
+    };
+    // numérotation de haut en bas : les étapes sont créées dans l'ordre du dessin
+    make(b);
+    // placé à droite de ce qui existe déjà, en haut
+    let mx = Infinity, my = Infinity;
+    for (const it of made) {
+      if (it.t === 'wire') for (const q of it.pts) { mx = Math.min(mx, q[0]); my = Math.min(my, q[1]); }
+      else { mx = Math.min(mx, it.x - STEP_H); my = Math.min(my, it.y - STEP_H); }
+    }
+    const dx = Math.round(((bb ? bb.x + bb.w + 80 : 80) - mx) / GRID) * GRID, dy = Math.round(((bb ? bb.y : 60) - my) / GRID) * GRID;
+    for (const it of made) {
+      if (it.t === 'wire') it.pts = it.pts.map((q) => [q[0] + dx, q[1] + dy]);
+      else { it.x += dx; it.y += dy; }
+    }
+    mutate(() => { g.items.push(...made); });
+    S.sels = made.map((i) => i.id);
+    render(); fit(); updateUI();
+    hint(`Modèle « ${TEMPLATE_NAMES[key]} » ajouté (sélectionné : faites-le glisser pour le placer). Complétez les actions et réceptivités.`);
+  }
+
+
   /* ---------- Dessin ---------- */
   function sceneSVG(opts) {
     const o = opts || {};
@@ -581,7 +975,7 @@
           const nx = -(b[1] - a[1]) / L * 3, ny = (b[0] - a[0]) / L * 3;
           for (const sg of [1, -1]) s += `<line x1="${rnd(a[0] + nx * sg)}" y1="${rnd(a[1] + ny * sg)}" x2="${rnd(b[0] + nx * sg)}" y2="${rnd(b[1] + ny * sg)}" stroke="${INK}" stroke-width="1.4"/>`;
         }
-      } else s += `<polyline points="${w.pts.map((q) => q.join(',')).join(' ')}" fill="none" stroke="${INK}" stroke-width="1.6" stroke-linejoin="miter"/>`;
+      } else s += `<polyline points="${trimToDouble(w, list).map((q) => q.join(',')).join(' ')}" fill="none" stroke="${INK}" stroke-width="1.6" stroke-linejoin="miter"/>`;
       for (const r of w.arrows || []) {
         const q = arrowPos(w, r);
         const ux = q.dx, uy = q.dy, px = -uy, py = ux;          // sens du trait et perpendiculaire
@@ -600,7 +994,7 @@
       for (const b of boxes) {
         s += `<rect x="${rnd(b.x)}" y="${rnd(b.y)}" width="${rnd(b.w)}" height="${b.h}" fill="#fff" stroke="${INK}" stroke-width="1.6"/>`;
         const ty = withRef ? b.y + 18 : st.y + 4.5;
-        if (b.main) s += `<text x="${rnd(b.x + b.w / 2)}" y="${rnd(ty)}" font-size="12" text-anchor="middle" font-family="${FONT}" fill="${INK}">${esc(b.main)}</text>`;
+        if (b.main) s += `<text x="${rnd(b.x + b.w / 2)}" y="${rnd(ty)}" font-size="12" text-anchor="middle" font-family="${FONT}" fill="${INK}">${richSVG(b.main)}</text>`;
         else if (!o.export && !withRef) s += `<text x="${rnd(b.x + b.w / 2)}" y="${rnd(ty)}" font-size="11" font-style="italic" text-anchor="middle" font-family="${FONT}" fill="#9aa1ac">${esc(ph('act', view))}</text>`;
         if (withRef && b.ref) s += `<text x="${rnd(b.x + b.w / 2)}" y="${rnd(b.y + b.h - 8)}" font-size="11" font-style="italic" text-anchor="middle" font-family="${FONT}" fill="#5a6b86" opacity="${S.refOp}">${esc(b.ref)}</text>`;
       }
@@ -609,9 +1003,9 @@
     for (const tr of list.filter((i) => i.t === 'trans')) {
       s += `<line x1="${tr.x - TR_W}" y1="${tr.y}" x2="${tr.x + TR_W}" y2="${tr.y}" stroke="${INK}" stroke-width="3"/>`;
       const main = txt(tr.id, view), ref = withRef ? txt(tr.id, S.ref) : '';
-      if (main) s += `<text x="${tr.x + TR_W + 8}" y="${tr.y + 4.5}" font-size="12" font-family="${FONT}" fill="${INK}">${esc(main)}</text>`;
+      if (main) s += `<text x="${tr.x + TR_W + 8}" y="${tr.y + 4.5}" font-size="12" font-family="${FONT}" fill="${INK}">${richSVG(main)}</text>`;
       else if (!o.export) s += `<text x="${tr.x + TR_W + 8}" y="${tr.y + 4.5}" font-size="11" font-style="italic" font-family="${FONT}" fill="#9aa1ac">${esc(ph('trans', view))}</text>`;
-      if (ref) s += `<text x="${tr.x + TR_W + 8}" y="${tr.y + 18}" font-size="11" font-style="italic" font-family="${FONT}" fill="#5a6b86" opacity="${S.refOp}">${esc(ref)}</text>`;
+      if (ref) s += `<text x="${tr.x + TR_W + 8}" y="${tr.y + 18}" font-size="11" font-style="italic" font-family="${FONT}" fill="#5a6b86" opacity="${S.refOp}">${richSVG(ref)}</text>`;
     }
     return s;
   }
@@ -630,6 +1024,7 @@
   }
 
   function overlaySVG() {
+    if (S.sim) return simOverlay();
     let o = '';
     const k = S.cam.k;
     const dash = `fill="none" stroke="${SEL}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"`;
@@ -675,6 +1070,15 @@
           `<path d="M0 -9 L9 7 L-9 7 Z" fill="${WARN}" stroke="#7a5200" stroke-width="1" stroke-linejoin="round"/>` +
           `<text x="0" y="5.2" font-size="11" font-weight="700" text-anchor="middle" font-family="${FONT}" fill="#fff">!</text></g>`;
       }
+    }
+    // ronds rouges : erreurs de structure (règles du Grafcet)
+    if (S.check) {
+      const sc = 1 / Math.max(0.6, k);
+      structIssues().forEach((q, i) => {
+        o += `<g class="gf-sissue" data-sissue="${i}" transform="translate(${rnd(q.x)} ${rnd(q.y)}) scale(${rnd(sc)})"><title>${esc(q.why)}</title>` +
+          `<circle r="8" fill="${BAD}" stroke="#fff" stroke-width="1.5"/>` +
+          `<text x="0" y="4.2" font-size="11" font-weight="700" text-anchor="middle" font-family="${FONT}" fill="#fff">!</text></g>`;
+      });
     }
     return o;
   }
@@ -839,9 +1243,59 @@
     if (it.t === 'step') { editStep(it); return; }
     if (it.t !== 'act' && it.t !== 'trans') return;
     const g = G();
-    const v = window.prompt(promptLabel(it), g.tx[S.view][it.id] || '');
-    if (v === null) { if (fresh) render(); return; }
-    mutate(() => { const t = v.trim().slice(0, 120); if (t) g.tx[S.view][it.id] = t; else delete g.tx[S.view][it.id]; });
+    askText(it, g.tx[S.view][it.id] || '').then((v) => {
+      if (v === null) { if (fresh) render(); return; }
+      const gg = G();
+      if (!gg || !find(it.id)) return;
+      mutate(() => { const t = normText(v); if (t) gg.tx[S.view][it.id] = t; else delete gg.tx[S.view][it.id]; });
+    });
+  }
+  // Fenêtre de saisie : touches ↑ ↓ NON ET OU temporisation, aperçu avec la barre du NON et vérification immédiate
+  const KEYS = {
+    trans: [['↑', '↑ front montant'], ['↓', '↓ front descendant'], ['/', 'NON (barre)'], [' . ', 'ET'], [' + ', 'OU'], ['(', '('], [')', ')'], ['5s/X', 'Temporisation t/Xn'], ['1', '= 1 (toujours vraie)']],
+    act: [],
+  };
+  function askText(it, cur) {
+    const dlg = $('#dlg-gftext');
+    if (!dlg || typeof dlg.showModal !== 'function') return Promise.resolve(window.prompt(promptLabel(it), cur));
+    return new Promise((resolve) => {
+      const kind = it.t === 'act' ? 'act' : 'trans';
+      const input = $('#gft-input'), prev = $('#gft-preview'), keys = $('#gft-keys');
+      const st = kind === 'act' ? find(it.step) : null;
+      $('#gft-cat').textContent = VIEW_NAMES[S.view];
+      $('#gft-title').textContent = kind === 'act' ? `Action de l’étape ${st ? st.n : ''}` : 'Réceptivité de la transition';
+      $('#gft-help').textContent = promptLabel(it).replace(VIEW_NAMES[S.view] + ' — ', '').replace(/ :$/, '') +
+        (kind === 'trans' ? ' — NON : « / » devant la variable (/a s’affiche avec une barre) ; ET : « . » ; OU : « + ».' : '');
+      let ks = KEYS[kind].slice();
+      if (S.view === 'automate') ks = [kind === 'act' ? ['%Q2.', '%Q2.'] : ['%I1.', '%I1.'], ...ks];
+      keys.innerHTML = ks.map(([ins, lab], i) => `<button type="button" class="btn btn-ghost btn-sm" data-k="${i}">${esc(lab)}</button>`).join('');
+      keys.hidden = !ks.length;
+      input.value = cur;
+      const upd = () => {
+        const t = normText(input.value);
+        const why = textIssue(t, kind, S.view);
+        prev.innerHTML = (t ? `<svg class="gft-svg" height="26" width="100%"><text x="6" y="18" font-size="15" font-family="${FONT}" fill="currentColor">${richSVG(t)}</text></svg>` : '<span class="gft-empty">(vide)</span>') +
+          (why ? `<span class="gft-issue">⚠ ${esc(why)}</span>` : '<span class="gft-ok">✓</span>');
+      };
+      const onKey = (e) => {
+        const b = e.target.closest('[data-k]');
+        if (!b) return;
+        const ins = ks[Number(b.dataset.k)][0];
+        const a = input.selectionStart == null ? input.value.length : input.selectionStart, z = input.selectionEnd == null ? a : input.selectionEnd;
+        input.setRangeText(ins, a, z, 'end');
+        if (ins === '5s/X') input.setSelectionRange(a, a + 1);          // le nombre de secondes est sélectionné, prêt à être remplacé
+        input.focus(); upd();
+      };
+      const done = () => {
+        keys.removeEventListener('click', onKey); input.removeEventListener('input', upd); dlg.removeEventListener('close', done);
+        resolve(dlg.returnValue === 'ok' ? input.value : null);
+      };
+      keys.addEventListener('click', onKey); input.addEventListener('input', upd); dlg.addEventListener('close', done);
+      upd();
+      dlg.returnValue = '';
+      dlg.showModal();
+      input.focus(); input.select();
+    });
   }
   function editStep(st) {
     const v = window.prompt('Numéro de l’étape :', String(st.n));
@@ -955,6 +1409,7 @@
     const p = toWorld(e);
     const pan = () => { S.drag = { mode: 'pan', cx: e.clientX, cy: e.clientY, vx: S.cam.x, vy: S.cam.y }; };
     if (e.button === 1 || e.button === 2) { pan(); return; }
+    if (S.sim) { if (!simDown(p)) pan(); return; }
     const h = hit(p);
     switch (S.tool) {
       case 'select': {
@@ -1086,6 +1541,8 @@
   svg.addEventListener('click', (e) => {
     const w = e.target.closest && e.target.closest('[data-warn]');
     if (w) { const it = find(w.dataset.warn); if (it) hint('⚠ ' + textIssue(txt(it.id), it.t, S.view) + ' — touchez deux fois l’élément pour corriger son texte.'); }
+    const r = e.target.closest && e.target.closest('[data-sissue]');
+    if (r) { const q = structIssues()[Number(r.dataset.sissue)]; if (q) hint('● ' + q.why); }
   });
 
   /* ---------- Clavier ---------- */
@@ -1094,6 +1551,7 @@
     const tag = (e.target && e.target.tagName) || '';
     if (/INPUT|SELECT|TEXTAREA/.test(tag)) return;
     const mod = e.ctrlKey || e.metaKey;
+    if (S.sim) { if (e.key === 'Escape') stopSim(); return; }
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); doRedo(); return; }
     if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); S.sels = items().filter((i) => i.t !== 'link' && i.t !== 'act').map((i) => i.id); render(); updateUI(); return; }
@@ -1114,6 +1572,7 @@
     trans: 'Transition : touchez le plan pour la poser. Reliez-la ensuite avec l’outil Trait.',
     act: 'Action : touchez une étape pour lui ajouter une action (plusieurs possibles).',
     wire: 'Trait : touchez le départ (il s’accroche au haut ou au bas d’une étape, au centre d’une transition, ou à un autre trait), puis chaque coude. Le trait se termine sur un élément ou un trait, par un double appui ou Échap. Les segments sont toujours horizontaux ou verticaux. « Trait double » pour les ET.',
+    sim: 'Simulation : le jeton rouge marque les étapes actives, les actions en cours sont en vert. Touchez une transition validée (en vert) pour la franchir quand sa réceptivité devient vraie. Touchez une étape pour l’activer ou la désactiver à la main. Échap ou « Arrêter » pour revenir au dessin.',
     arrow: 'Flèche : touchez un trait pour y poser une flèche dans le sens du tracé ; touchez la flèche pour l’inverser, encore une fois pour la retirer.',
   };
   let hintTimer = null;
@@ -1123,7 +1582,7 @@
     clearTimeout(hintTimer);
     hintTimer = setTimeout(updateUI, 5000);
   }
-  function setTool(t) { if (S.wdraft) finishWire(); S.tool = t; S.drag = null; renderOverlay(); updateUI(); }
+  function setTool(t) { if (S.sim) stopSim(true); if (S.wdraft) finishWire(); S.tool = t; S.drag = null; renderOverlay(); updateUI(); }
   function updateUI() {
     document.querySelectorAll('[data-gtool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.gtool === S.tool)));
     document.querySelectorAll('[data-gv-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.gvTab === S.view)));
@@ -1153,14 +1612,23 @@
     $('#gf-ref-op').disabled = !S.ref;
     $('#gf-copy').disabled = !S.ref || S.ref === S.view;
     $('#gf-snap').checked = S.snap;
+    $('#gf-check').setAttribute('aria-pressed', String(S.check));
+    $('#gf-sim').setAttribute('aria-pressed', String(!!S.sim));
+    $('#gf-sim').textContent = S.sim ? 'Arrêter la simulation' : 'Simuler';
+    $('#gf-sim-reset').hidden = !S.sim;
     let h = (S.tool === 'select' && S.multi ? HINTS.multi : HINTS[S.tool]) || '';
-    {
+    if (S.sim) h = `${S.sim.n} transition${S.sim.n > 1 ? 's' : ''} franchie${S.sim.n > 1 ? 's' : ''}. ` + HINTS.sim;
+    else {
+      if (S.check) {
+        const m = structIssues().length;
+        if (m) h = `● ${m} erreur${m > 1 ? 's' : ''} de structure (rond rouge : touchez-le pour lire la règle). ` + h;
+      }
       const n = textTargets().filter((t) => textIssue(txt(t.id), t.kind, S.view)).length;
       if (n) h = `⚠ ${n} élément${n > 1 ? 's' : ''} à compléter ou à corriger (panneau « ! »). ` + h;
     }
     if (S.ref === S.view) h = 'Le calque choisi est le point de vue affiché : choisissez-en un autre pour le voir en transparence. ' + h;
     $('#gf-hint').textContent = h;
-    svg.style.cursor = S.tool === 'select' ? 'default' : 'crosshair';
+    svg.style.cursor = S.sim ? 'pointer' : S.tool === 'select' ? 'default' : 'crosshair';
   }
   function setView(v) {
     if (!VIEWS.includes(v)) return;
@@ -1234,13 +1702,22 @@
     S.wireDbl = !S.wireDbl; updateUI();
   });
   $('#gf-gap-p').addEventListener('click', () => changeGap(1));
+  { const c = $('#gft-cancel'); if (c) c.addEventListener('click', () => $('#dlg-gftext').close('cancel')); }
+  $('#gf-check').addEventListener('click', () => {
+    S.check = !S.check;
+    try { window.localStorage.setItem('ef_gf_check', S.check ? '1' : '0'); } catch (e) { /* ignoré */ }
+    renderOverlay(); updateUI();
+  });
+  $('#gf-sim').addEventListener('click', () => (S.sim ? stopSim() : startSim()));
+  $('#gf-sim-reset').addEventListener('click', () => startSim());
+  $('#gf-tpl').addEventListener('change', (e) => { const v = e.target.value; e.target.value = ''; if (v) insertTemplate(v); });
 
   // Changement de projet : nouveau Grafcet, historique vidé, vue ajustée
   function onSchema() {
     const api = API(), s = api && api.schema();
     const id = s ? s.id : null;
     if (id !== S.schemaId) {
-      S.schemaId = id; S.sels = []; S.drag = null; S.undo = []; S.redo = [];
+      S.schemaId = id; S.sels = []; S.drag = null; S.undo = []; S.redo = []; S.sim = null;
       const fixed = repairOverlaps();
       const conv = migrateLinks();
       if (conv) { save(); setTimeout(() => hint(`${conv} liaison${conv > 1 ? 's' : ''} transformée${conv > 1 ? 's' : ''} en traits : vous pouvez maintenant les modifier librement.`), 60); }
@@ -1263,5 +1740,5 @@
   S.needFit = true;
   updateUI();
 
-  window.GrafcetEditor = { clean, _state: S, _G: () => G(), _issue: designationIssue, _textIssue: textIssue, _render: render };
+  window.GrafcetEditor = { clean, _state: S, _G: () => G(), _issue: designationIssue, _textIssue: textIssue, _render: render, _topo: () => topo(), _struct: () => structIssues(), _not: notParts };
 })();

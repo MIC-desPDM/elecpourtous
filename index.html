@@ -223,6 +223,23 @@
         <span class="sch-wallhint">Utilisé par « Ordonner » : sélectionnez plusieurs étapes, puis Ordonner.</span>
       </div>
 
+      <div class="sch-bgbar" role="toolbar" aria-label="Vérification, simulation et modèles">
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" id="gf-check" aria-pressed="true" title="Affiche un rond rouge sur chaque erreur de structure (règles du Grafcet)">Vérifier la structure</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" id="gf-sim" aria-pressed="false" title="Faire évoluer le Grafcet : jetons sur les étapes actives, franchissement des transitions">Simuler</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="gf-sim-reset" hidden title="Revenir à la situation initiale">Réinitialiser</button>
+        <span class="sch-sep"></span>
+        <label class="sch-snap">Modèles
+          <select id="gf-tpl" class="gf-select">
+            <option value="">Insérer une structure…</option>
+            <option value="lineaire">Séquence linéaire</option>
+            <option value="aiguillage">Aiguillage (divergence / convergence en OU)</option>
+            <option value="simultanees">Séquences simultanées (divergence / convergence en ET)</option>
+            <option value="saut">Saut d’étapes</option>
+            <option value="reprise">Reprise de séquence</option>
+          </select>
+        </label>
+      </div>
+
       <div class="sch-bgbar" role="toolbar" aria-label="Calque de référence">
         <span class="sch-bglabel">Calque</span>
         <label class="sch-snap">Afficher en transparence
@@ -392,6 +409,22 @@
       <input type="file" id="file-import" accept="application/json,.json" hidden="">
     </div>
   </footer>
+
+  <!-- Grafcet : saisie d'une action ou d'une réceptivité -->
+  <dialog id="dlg-gftext" class="dialog gft-dlg" aria-labelledby="gft-title">
+    <form method="dialog">
+      <p class="dialog-cat" id="gft-cat"></p>
+      <h2 id="gft-title"></h2>
+      <input type="text" id="gft-input" class="gft-input" maxlength="120" autocomplete="off" spellcheck="false" aria-describedby="gft-help">
+      <div class="gft-keys" id="gft-keys"></div>
+      <div class="gft-preview" id="gft-preview" aria-live="polite"></div>
+      <p class="dialog-desc gft-help" id="gft-help"></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" id="gft-cancel">Annuler</button>
+        <button type="submit" class="btn btn-primary" value="ok" id="gft-ok">Valider</button>
+      </div>
+    </form>
+  </dialog>
 
   <!-- Détail + calculateur -->
   <dialog id="dlg-formula" class="dialog" aria-labelledby="f-title">
