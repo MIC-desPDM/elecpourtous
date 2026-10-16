@@ -33,13 +33,18 @@
           <input type="search" id="search" placeholder="Rechercher une formule…" aria-label="Rechercher une formule" autocomplete="off">
         </div>
         <button class="icon-btn" data-theme-toggle="" aria-label="Passer en mode clair"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path></svg></button>
+        <button type="button" class="btn btn-ghost btn-sm acct-btn" id="acct-btn" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 4-6 8-6s8 2 8 6"></path></svg>
+          <span id="acct-label">Se connecter</span>
+        </button>
       </div>
     </div>
     <nav class="view-tabs" aria-label="Sections">
       <div class="view-tabs-inner" role="tablist">
         <button type="button" role="tab" class="view-tab" data-view-tab="formulas" aria-selected="true">Formules de MELEC</button>
-        <button type="button" role="tab" class="view-tab" data-view-tab="schemas" aria-selected="false">Schémas</button>
         <button type="button" role="tab" class="view-tab" data-view-tab="designation" aria-selected="false">Désignation MELEC</button>
+        <button type="button" role="tab" class="view-tab" data-view-tab="schemas" aria-selected="false">Schémas</button>
+        <button type="button" role="tab" class="view-tab" data-view-tab="community" aria-selected="false">Commentaires</button>
       </div>
     </nav>
   </header>
@@ -395,6 +400,40 @@
     </section>
   </main>
 
+  <!-- ===== Section : Commentaires (comptes, validation par l'administrateur) ===== -->
+  <main id="main-community" class="community-main" data-view="community" hidden>
+    <header class="com-head">
+      <h2>Commentaires</h2>
+      <p class="com-intro">Une question, un bug, une idée ? Écrivez-le ici. Chaque message est relu par l’administrateur avant d’être publié. Seuls votre pseudo et les informations que vous choisissez de montrer apparaissent.</p>
+    </header>
+    <p class="com-notice" id="com-notice" hidden></p>
+    <div class="sch-subtabs com-tabs" role="tablist" aria-label="Commentaires">
+      <button type="button" role="tab" class="sch-subtab" data-com-tab="list" aria-selected="true">Messages publiés</button>
+      <button type="button" role="tab" class="sch-subtab" data-com-tab="mine" aria-selected="false">Écrire · mes messages</button>
+      <button type="button" role="tab" class="sch-subtab" data-com-tab="admin" aria-selected="false" hidden>Administration <span class="com-count" id="com-pending-count"></span></button>
+    </div>
+    <section class="com-panel" data-com-panel="list">
+      <div class="com-filters" id="com-filters" role="group" aria-label="Filtrer par sujet"></div>
+      <div class="com-list" id="com-list" aria-live="polite"></div>
+      <button type="button" class="btn btn-ghost btn-sm com-more" id="com-more" hidden>Voir plus de messages</button>
+    </section>
+    <section class="com-panel" data-com-panel="mine" hidden>
+      <div id="com-write"></div>
+      <h3 class="com-h3">Mes messages</h3>
+      <div class="com-list" id="com-mine"></div>
+    </section>
+    <section class="com-panel" data-com-panel="admin" hidden>
+      <div class="com-admin-tabs" role="tablist" aria-label="Administration">
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-adm-tab="pending" aria-pressed="true">À valider</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-adm-tab="published" aria-pressed="false">Publiés</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-adm-tab="rejected" aria-pressed="false">Refusés</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-adm-tab="tags" aria-pressed="false">Sujets</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-tool" data-adm-tab="accounts" aria-pressed="false">Comptes</button>
+      </div>
+      <div id="com-admin"></div>
+    </section>
+  </main>
+
   <footer class="site-footer" data-view="formulas">
     <p>Vos formules personnalisées et vos favoris sont enregistrés uniquement sur votre appareil.</p>
     <div class="footer-actions">
@@ -424,6 +463,40 @@
         <button type="submit" class="btn btn-primary" value="ok" id="gft-ok">Valider</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Compte : connexion, création, gestion -->
+  <dialog id="dlg-account" class="dialog acct-dlg" aria-labelledby="acct-title">
+    <button class="dialog-close icon-btn" id="acct-close" aria-label="Fermer">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+    </button>
+    <p class="dialog-cat">Compte ElecPourTous</p>
+    <h2 id="acct-title">Se connecter</h2>
+    <div id="acct-body"></div>
+  </dialog>
+
+  <!-- Confidentialité -->
+  <dialog id="dlg-privacy" class="dialog acct-dlg" aria-labelledby="priv-title">
+    <button class="dialog-close icon-btn" id="priv-close" aria-label="Fermer">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+    </button>
+    <p class="dialog-cat">Vos données</p>
+    <h2 id="priv-title">Confidentialité</h2>
+    <div class="priv-text">
+      <p><strong>Sans compte</strong>, ElecPourTous fonctionne entièrement sur votre appareil : vos schémas, Grafcet et réglages ne quittent jamais votre appareil.</p>
+      <p><strong>Avec un compte</strong>, seules ces informations sont enregistrées en ligne :</p>
+      <ul>
+        <li>votre pseudo, votre tranche d’âge et votre statut (élève, apprenti…) ;</li>
+        <li>une courte description, si vous en écrivez une ;</li>
+        <li>vos choix d’affichage et vos messages ;</li>
+        <li>votre phrase de passe, <strong>chiffrée</strong> : personne, pas même l’administrateur, ne peut la lire.</li>
+      </ul>
+      <p>Aucun e-mail, aucun nom, aucun numéro de téléphone n’est demandé. N’écrivez pas d’informations permettant de vous reconnaître (nom, adresse, établissement, contact) dans votre pseudo, votre description ou vos messages.</p>
+      <p><strong>Qui voit quoi ?</strong> Tout le monde voit les messages validés, avec votre pseudo et uniquement les informations que vous avez choisi de montrer. L’administrateur voit votre pseudo, votre tranche d’âge, votre statut et votre description, pour gérer les messages.</p>
+      <p><strong>Où ?</strong> Chez l’hébergeur Supabase, sur des serveurs situés en Europe. Comme tout service en ligne, l’hébergeur peut garder pendant une courte durée des journaux techniques (adresse IP de connexion, par exemple) pour la sécurité.</p>
+      <p><strong>Moins de 15 ans :</strong> l’accord d’un parent est nécessaire pour créer un compte.</p>
+      <p><strong>Vos droits :</strong> vous pouvez modifier vos informations à tout moment dans « Mon compte », et <strong>supprimer votre compte</strong> : votre compte et tous vos messages sont alors effacés définitivement.</p>
+    </div>
   </dialog>
 
   <!-- Détail + calculateur -->
@@ -498,6 +571,8 @@
   <script defer="" src="assets/schemas-materials.js"></script>
   <script defer="" src="assets/schemas.js"></script>
   <script defer="" src="assets/grafcet.js"></script>
+  <script defer="" src="assets/cloud-config.js"></script>
+  <script defer="" src="assets/community.js"></script>
 
 
 </body></html>

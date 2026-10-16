@@ -1,6 +1,6 @@
 /* Service worker : fonctionnement hors ligne.
    Incrémenter CACHE_VERSION à chaque modification des fichiers pour forcer la mise à jour. */
-const CACHE_VERSION = 'v29';
+const CACHE_VERSION = 'v30';
 const CACHE = 'electroformules-' + CACHE_VERSION;
 const FILES = [
   "./",
@@ -34,6 +34,8 @@ const FILES = [
   "assets/schemas-materials.js",
   "assets/schemas.js",
   "assets/grafcet.js",
+  "assets/cloud-config.js",
+  "assets/community.js",
   "assets/styles.css",
   "icons/icon-180.png",
   "icons/icon-192.png",
