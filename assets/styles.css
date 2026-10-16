@@ -1128,3 +1128,4 @@ textarea.com-input { resize: vertical; min-height: 44px; }
   .com-date { margin-left: 0; }
 }
 .sch-subtab[hidden] { display: none; }
+.brand-version { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.02em; vertical-align: middle; }

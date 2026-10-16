@@ -1,7 +1,7 @@
 {
   "name": "ElecPourTous",
   "short_name": "ElecPourTous",
-  "description": "Formules d'électrotechnique, calculateurs, schémas et désignation des matériels",
+  "description": "L’application gratuite du Bac Pro MELEC : formules et calculateurs, désignation des matériels, schémas d’implantation et unifilaires, Grafcet avec simulation.",
   "lang": "fr",
   "start_url": "./index.html",
   "scope": "./",
